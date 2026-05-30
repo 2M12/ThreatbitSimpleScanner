@@ -8,6 +8,10 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime
+import json
+import urllib.request
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -28,6 +32,10 @@ import win32net
 import win32file
 import wmi
 import psutil
+
+VERSION = "1.1"
+GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
+DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
 def random_process_name(length=10):
     return ''.join(random.choice(string.ascii_letters) for _ in range(length))
@@ -58,6 +66,26 @@ def load_hive(path, name):
 def unload_hive(name):
     subprocess.run(["reg", "unload", f"HKLM\\{name}"], capture_output=True, check=False)
 
+def check_for_updates():
+    try:
+        req = urllib.request.Request(GITHUB_RELEASES_URL, headers={"User-Agent": "ThreatbitScanner"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            latest_version = data.get("tag_name", "").replace("v", "")
+            if latest_version and latest_version != VERSION:
+                return True, latest_version, data.get("html_url", DOWNLOAD_URL)
+    except:
+        pass
+    return False, VERSION, DOWNLOAD_URL
+
+class UpdateChecker(QThread):
+    update_available = Signal(str, str)
+    
+    def run(self):
+        has_update, latest, url = check_for_updates()
+        if has_update:
+            self.update_available.emit(latest, url)
+
 class WorkerSignals(QObject):
     progress = Signal(int)
     status = Signal(str)
@@ -74,6 +102,7 @@ class ScanWorker(QThread):
         self.current_step = 0
         self.threats = []
         self.suspicious = []
+        self._executor = ThreadPoolExecutor(max_workers=4)
 
     def run(self):
         steps = [
@@ -85,18 +114,69 @@ class ScanWorker(QThread):
             self.restore_fonts,
             self.run_sfc,
             self.reset_network,
-	    self.restore_mbr,
+            self.restore_mbr,
         ]
+        
+        sfc_future = None
+        net_future = None
+        mbr_future = None
         
         for i, step in enumerate(steps):
             if i < 2:
                 step()
+            elif step == self.run_sfc and self.options.get("run_sfc", False):
+                sfc_future = self._executor.submit(self._run_sfc_parallel)
+            elif step == self.reset_network and self.options.get("reset_network", False):
+                net_future = self._executor.submit(self._reset_network_parallel)
+            elif step == self.restore_mbr and self.options.get("restore_mbr", False):
+                mbr_future = self._executor.submit(self._restore_mbr_parallel)
             elif self.options.get(step.__name__, False):
                 step()
             self.current_step += 1
             self.signals.progress.emit(int((self.current_step / self.total_steps) * 100))
         
+        if sfc_future:
+            sfc_future.result()
+        if net_future:
+            net_future.result()
+        if mbr_future:
+            mbr_future.result()
+        
+        self._executor.shutdown(wait=True)
         self.signals.finished.emit(self.threats, self.suspicious)
+
+    def _run_sfc_parallel(self):
+        self.signals.status.emit("Выполнение sfc /scannow (параллельно)...")
+        self.log_action("Запуск sfc /scannow (параллельно)")
+        subprocess.run(["sfc", "/scannow"], capture_output=True, encoding='cp866', errors='ignore')
+
+    def _reset_network_parallel(self):
+        self.signals.status.emit("Сброс сетевых параметров (параллельно)...")
+        self.log_action("Сброс сетевых параметров (параллельно)")
+        commands = [
+            'netsh winsock reset',
+            'netsh int ip reset',
+            'ipconfig /flushdns',
+        ]
+        for cmd in commands:
+            subprocess.run(cmd, shell=True, capture_output=True, encoding='cp866', errors='ignore')
+        hosts_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'System32\\drivers\\etc\\hosts')
+        try:
+            with open(hosts_path, 'w', encoding='utf-8') as f:
+                f.write("127.0.0.1 localhost\n::1 localhost\n")
+        except:
+            pass
+
+    def _restore_mbr_parallel(self):
+        self.signals.status.emit("Восстановление MBR (параллельно)...")
+        self.log_action("Восстановление MBR (параллельно)")
+        commands = [
+            'bootrec /fixmbr',
+            'bootrec /fixboot',
+            'bootrec /rebuildbcd',
+        ]
+        for cmd in commands:
+            subprocess.run(cmd, shell=True, capture_output=True, encoding='cp866', errors='ignore')
 
     def log_action(self, msg):
         self.signals.log.emit(msg)
@@ -454,6 +534,19 @@ class ScanWorker(QThread):
             except (ValueError, TypeError):
                 pass
         
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun", 0, winreg.KEY_READ)
+            self.signals.threat_found.emit(
+                r"Policies\Explorer\DisallowRun",
+                "red", "Обнаружен раздел DisallowRun - ограничение запуска приложений")
+            self.threats.append((winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun",
+                None, None, "delete_subkey"))
+            winreg.CloseKey(key)
+        except FileNotFoundError:
+            pass
+        
         policies_path = r"Software\Microsoft\Windows\CurrentVersion\Policies"
         system_policies = {
             "DisableTaskMgr": "Диспетчер задач отключён",
@@ -673,43 +766,13 @@ class ScanWorker(QThread):
                 subprocess.run(cmd, shell=True, capture_output=True, encoding='cp866', errors='ignore')
 
     def run_sfc(self):
-        if self.options.get("run_sfc", False):
-            self.signals.status.emit("Выполнение sfc /scannow...")
-            self.log_action("Запуск sfc /scannow")
-            subprocess.run(["sfc", "/scannow"], capture_output=True, encoding='cp866', errors='ignore')
+        pass
 
     def reset_network(self):
-        if self.options.get("reset_network", False):
-            self.signals.status.emit("Сброс сетевых параметров...")
-            self.log_action("Сброс сетевых параметров")
-            commands = [
-                'netsh winsock reset',
-                'netsh int ip reset',
-                'ipconfig /flushdns',
-            ]
-            for cmd in commands:
-                subprocess.run(cmd, shell=True, capture_output=True, encoding='cp866', errors='ignore')
-            
-            hosts_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'System32\\drivers\\etc\\hosts')
-            try:
-                with open(hosts_path, 'w', encoding='utf-8') as f:
-                    f.write("127.0.0.1 localhost\n::1 localhost\n")
-            except:
-                pass
+        pass
 
     def restore_mbr(self):
-        if self.options.get("restore_mbr", False):
-            self.signals.status.emit("Восстановление MBR...")
-            self.log_action("Восстановление MBR")
-            commands = [
-                'bootrec /fixmbr',
-                'bootrec /fixboot',
-                'bootrec /rebuildbcd',
-        ]
-        for cmd in commands:
-            subprocess.run(cmd, shell=True, capture_output=True, encoding='cp866', errors='ignore')
-
-
+        pass
 
 class FixWorker(QThread):
     finished = Signal()
@@ -767,7 +830,7 @@ class FixWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Threatbit Simple Scanner | v1.0")
+        self.setWindowTitle(f"Threatbit Simple Scanner | v{VERSION}")
         self.setMinimumSize(950, 550)
         self.resize(950, 600)
         
@@ -821,6 +884,15 @@ class MainWindow(QMainWindow):
         pe_label.setStyleSheet("color: #AAAAAA; padding: 6px;")
         pe_label.setAlignment(Qt.AlignCenter)
         nav_layout.addWidget(pe_label)
+        
+        update_label = QLabel("Проверка обновлений...")
+        update_label.setFont(QFont("Consolas", 7))
+        update_label.setStyleSheet("color: #888888; padding: 4px;")
+        update_label.setAlignment(Qt.AlignCenter)
+        update_label.setWordWrap(True)
+        nav_layout.addWidget(update_label)
+        self.update_label = update_label
+        
         nav_layout.addStretch()
         
         self.stacked_widget = QStackedWidget()
@@ -842,12 +914,27 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.stacked_widget, 1)
         
         self.btn_scan.setChecked(True)
+        
+        self.update_checker = UpdateChecker()
+        self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.start()
 
     def switch_page(self, index):
         self.stacked_widget.setCurrentIndex(index)
         for btn in [self.btn_scan, self.btn_tools, self.btn_about]:
             btn.setChecked(False)
         [self.btn_scan, self.btn_tools, self.btn_about][index].setChecked(True)
+
+    def on_update_available(self, latest_version, url):
+        self.update_label.setText(f"Доступна v{latest_version}")
+        self.update_label.setStyleSheet("color: #00A8E8; padding: 4px; font-weight: bold;")
+        reply = QMessageBox.question(
+            self, "Доступно обновление",
+            f"Доступна новая версия: v{latest_version}\nТекущая версия: v{VERSION}\n\nПерейти на страницу загрузки?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            os.startfile(url)
 
 class ScanPage(QWidget):
     def __init__(self):
@@ -1612,7 +1699,7 @@ class AboutPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         
-        title = QLabel("Threatbit Simple Scanner | v1.0")
+        title = QLabel(f"Threatbit Simple Scanner | v{VERSION}")
         title.setFont(QFont("Consolas", 16, QFont.Bold))
         title.setStyleSheet("color: #007ACC;")
         title.setAlignment(Qt.AlignCenter)
