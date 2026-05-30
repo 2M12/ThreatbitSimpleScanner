@@ -1,4 +1,4 @@
-# 🛡️ Threatbit Simple Scanner v1.0
+# 🛡️ Threatbit Simple Scanner
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/PySide6-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white)
@@ -107,7 +107,7 @@ python main.py
 ### Права администратора
 ### Если скачивается .py скрипт - установка нужных библиотек
 
-## ☑️ Hash-суммы
+## ☑️ Hash-суммы (это для версии v1.0)
 ```bash
 MD5: ad18f89ea744531eea03aedf74c97865
 SHA-1: 1f7a942565562daacc0495763859d79ce36f4eed
