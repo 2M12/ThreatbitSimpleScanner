@@ -33,7 +33,7 @@ import win32file
 import wmi
 import psutil
 
-VERSION = "1.1"
+VERSION = "1.1.1"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
 DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
