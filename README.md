@@ -109,9 +109,8 @@ python main.py
 
 ## ☑️ Hash-суммы
 ```bash
-MD5	bfff6672f4b9e559b402629163760742
-SHA-256	119e9de2ba93f8e3245220ff6a3b69bb4f9df1139cd85920de8e35640713e726
-```
+MD5	94292e0a955e8c2c89cb6485754cd2f3
+SHA-256	798db46300b86b9303b63d13e9f92cb8f841d4d3204b0cf336dfc31eca03d655
 
 ## 📜 Лицензия
 MIT © 2026 Mikhail (2M12) / ThreatBit
