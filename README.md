@@ -4,7 +4,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Version](https://img.shields.io/badge/version-1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 
 > Утилита для сканирования и восстановления системы после вирусных атак. Находит и удаляет вредоносные изменения в реестре Windows, которые пропускают обычные антивирусы.
 
