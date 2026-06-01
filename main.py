@@ -33,7 +33,7 @@ import win32file
 import wmi
 import psutil
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
 DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
@@ -74,17 +74,20 @@ def check_for_updates():
             latest_version = data.get("tag_name", "").replace("v", "")
             if latest_version and latest_version != VERSION:
                 return True, latest_version, data.get("html_url", DOWNLOAD_URL)
+            return False, VERSION, DOWNLOAD_URL
     except:
-        pass
-    return False, VERSION, DOWNLOAD_URL
+        return None, VERSION, DOWNLOAD_URL
 
 class UpdateChecker(QThread):
     update_available = Signal(str, str)
+    check_finished = Signal(object)
     
     def run(self):
-        has_update, latest, url = check_for_updates()
+        result = check_for_updates()
+        has_update, latest, url = result if result else (None, VERSION, DOWNLOAD_URL)
         if has_update:
             self.update_available.emit(latest, url)
+        self.check_finished.emit(has_update)
 
 class WorkerSignals(QObject):
     progress = Signal(int)
@@ -534,6 +537,25 @@ class ScanWorker(QThread):
             except (ValueError, TypeError):
                 pass
         
+        for hive, hive_name in [(winreg.HKEY_LOCAL_MACHINE, "HKLM"), (winreg.HKEY_CURRENT_USER, "HKCU")]:
+            actual, _ = self.get_reg_value(
+                hive,
+                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer",
+                "NoDriveTypeAutoRun"
+            )
+            if actual is not None:
+                try:
+                    if int(actual) != 0xFF:
+                        desc = f"Автозапуск ограничен (значение: {actual}, ожидалось: 0xFF)"
+                        self.signals.threat_found.emit(
+                            f"Policies\\Explorer\\NoDriveTypeAutoRun ({hive_name})",
+                            "yellow", desc)
+                        self.suspicious.append((hive,
+                            r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer",
+                            "NoDriveTypeAutoRun", 0xFF, "value"))
+                except (ValueError, TypeError):
+                    pass
+        
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                 r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun", 0, winreg.KEY_READ)
@@ -591,7 +613,6 @@ class ScanWorker(QThread):
             "NoStartMenuMorePrograms": "Меню Программы скрыто",
             "NoStartMenuMFUprogramsList": "Список часто используемых программ скрыт",
             "RestrictRun": "Запуск только разрешённых приложений",
-            "NoDriveTypeAutoRun": "Автозапуск отключён",
             "NoToolbarCustomize": "Настройка панелей инструментов запрещена",
             "NoBandCustomize": "Настройка полос запрещена",
             "NoInstrumentation": "Инструментирование отключено",
@@ -885,13 +906,11 @@ class MainWindow(QMainWindow):
         pe_label.setAlignment(Qt.AlignCenter)
         nav_layout.addWidget(pe_label)
         
-        update_label = QLabel("Проверка обновлений...")
-        update_label.setFont(QFont("Consolas", 7))
-        update_label.setStyleSheet("color: #888888; padding: 4px;")
-        update_label.setAlignment(Qt.AlignCenter)
-        update_label.setWordWrap(True)
-        nav_layout.addWidget(update_label)
-        self.update_label = update_label
+        self.update_label = QLabel(f"v{VERSION}")
+        self.update_label.setFont(QFont("Consolas", 8))
+        self.update_label.setStyleSheet("color: #888888; padding: 4px;")
+        self.update_label.setAlignment(Qt.AlignCenter)
+        nav_layout.addWidget(self.update_label)
         
         nav_layout.addStretch()
         
@@ -917,6 +936,7 @@ class MainWindow(QMainWindow):
         
         self.update_checker = UpdateChecker()
         self.update_checker.update_available.connect(self.on_update_available)
+        self.update_checker.check_finished.connect(self.on_check_finished)
         self.update_checker.start()
 
     def switch_page(self, index):
@@ -935,6 +955,16 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.Yes:
             os.startfile(url)
+    
+    def on_check_finished(self, has_update):
+        if has_update is None:
+            self.update_label.setText(f"v{VERSION} (автономный режим)")
+            self.update_label.setStyleSheet("color: #888888; padding: 4px;")
+        elif has_update:
+            pass
+        else:
+            self.update_label.setText(f"v{VERSION} актуальна")
+            self.update_label.setStyleSheet("color: #888888; padding: 4px;")
 
 class ScanPage(QWidget):
     def __init__(self):
