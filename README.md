@@ -4,7 +4,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Version](https://img.shields.io/badge/version-1.1.1-blue)
+![Version](https://img.shields.io/badge/version-1.1.2-blue)
 
 > Утилита для сканирования и восстановления системы после вирусных атак. Находит и удаляет вредоносные изменения в реестре Windows, которые пропускают обычные антивирусы.
 
@@ -109,8 +109,8 @@ python main.py
 
 ## ☑️ Hash-суммы
 ```bash
-MD5	1a33d68f356a0003eb6d0258b5a4633b
-SHA-256	e0083aabe06a470a8f5776575138ae7cb232da7522c55bc2309545bf7453de7e
+MD5	08e1c21659c078ac733e660a1a4e4c62
+SHA-256	24b44ea1177d8224b01cd7631cd251d6582c096cbd3ccf5297c245b1f0f9859d
 ```
 ## 📜 Лицензия
 MIT © 2026 Mikhail (2M12) / ThreatBit
