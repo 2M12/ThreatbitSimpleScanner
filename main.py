@@ -33,7 +33,7 @@ import win32file
 import wmi
 import psutil
 
-VERSION = "1.1.2"
+VERSION = "1.2"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
 DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
@@ -95,6 +95,7 @@ class WorkerSignals(QObject):
     threat_found = Signal(str, str, str)
     finished = Signal(list, list)
     log = Signal(str)
+    fix_log = Signal(str)
 
 class ScanWorker(QThread):
     def __init__(self, options, parent=None):
@@ -184,7 +185,9 @@ class ScanWorker(QThread):
     def log_action(self, msg):
         self.signals.log.emit(msg)
         if self.options.get("log_enabled", False):
-            log_path = Path.home() / "Documents" / "ThreatScan.log"
+            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "Threatbit.log"
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"[{datetime.now().isoformat()}] {msg}\n")
 
@@ -226,26 +229,34 @@ class ScanWorker(QThread):
             threat_type = "red" if is_red else "yellow"
             desc = description if description else f"Ожидалось: {expected}, найдено: {actual}"
             self.signals.threat_found.emit(f"{key_path}\\{value_name}", threat_type, desc)
+            item = (hive, key_path, value_name, expected, "value", threat_type, desc)
             if is_red:
-                self.threats.append((hive, key_path, value_name, expected, "value"))
+                self.threats.append(item)
             else:
-                self.suspicious.append((hive, key_path, value_name, expected, "value"))
+                self.suspicious.append(item)
+            self.signals.log.emit(f"[{threat_type.upper()}] {key_path}\\{value_name} — {desc}")
 
-    def check_registry_exists(self, key_path, value_name, hive=winreg.HKEY_LOCAL_MACHINE, description=""):
+    def check_registry_exists(self, key_path, value_name, hive=winreg.HKEY_LOCAL_MACHINE, description="", is_red=True):
         try:
             key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ)
             try:
                 winreg.QueryValueEx(key, value_name)
                 desc = description if description else "Обнаружен подозрительный параметр"
-                self.signals.threat_found.emit(f"{key_path}\\{value_name}", "red", desc)
-                self.threats.append((hive, key_path, value_name, None, "delete"))
+                threat_type = "red" if is_red else "yellow"
+                self.signals.threat_found.emit(f"{key_path}\\{value_name}", threat_type, desc)
+                item = (hive, key_path, value_name, None, "delete", threat_type, desc)
+                if is_red:
+                    self.threats.append(item)
+                else:
+                    self.suspicious.append(item)
+                self.signals.log.emit(f"[{threat_type.upper()}] {key_path}\\{value_name} — {desc}")
             except FileNotFoundError:
                 pass
             winreg.CloseKey(key)
         except FileNotFoundError:
             pass
 
-    def check_registry_multisz(self, key_path, value_name, expected_list, hive=winreg.HKEY_LOCAL_MACHINE, description=""):
+    def check_registry_multisz(self, key_path, value_name, expected_list, hive=winreg.HKEY_LOCAL_MACHINE, description="", is_red=True):
         actual, reg_type = self.get_reg_value(hive, key_path, value_name)
         if actual is None:
             return
@@ -266,8 +277,14 @@ class ScanWorker(QThread):
         
         if threat_found:
             desc = description if description else f"Ожидалось: {expected_list}, найдено: {actual}"
-            self.signals.threat_found.emit(f"{key_path}\\{value_name}", "red", desc)
-            self.threats.append((hive, key_path, value_name, expected_list, "multisz"))
+            threat_type = "red" if is_red else "yellow"
+            self.signals.threat_found.emit(f"{key_path}\\{value_name}", threat_type, desc)
+            item = (hive, key_path, value_name, expected_list, "multisz", threat_type, desc)
+            if is_red:
+                self.threats.append(item)
+            else:
+                self.suspicious.append(item)
+            self.signals.log.emit(f"[{threat_type.upper()}] {key_path}\\{value_name} — {desc}")
 
     def scan_autorun(self):
         self.signals.status.emit("Сканирование автозапуска...")
@@ -288,19 +305,21 @@ class ScanWorker(QThread):
             if isinstance(userinit_actual, str):
                 cleaned = userinit_actual.strip().rstrip(',').lower()
                 if cleaned != r"c:\windows\system32\userinit.exe":
+                    desc = f"Userinit изменён: {userinit_actual}, возможна загрузка вредоносного ПО"
                     self.signals.threat_found.emit(
                         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit",
-                        "red", f"Userinit изменён: {userinit_actual}, возможна загрузка вредоносного ПО")
+                        "red", desc)
                     self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-                        "Userinit", r"C:\Windows\system32\userinit.exe,", "value"))
+                        "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
             else:
+                desc = "Userinit имеет неверный тип данных"
                 self.signals.threat_found.emit(
                     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit",
-                    "red", "Userinit имеет неверный тип данных")
+                    "red", desc)
                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-                    "Userinit", r"C:\Windows\system32\userinit.exe,", "value"))
+                    "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
         
         self.check_registry_value(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows",
@@ -348,12 +367,13 @@ class ScanWorker(QThread):
                 threat_found = True
             
             if threat_found:
+                desc = f"BootExecute изменён: {bootexecute_actual}, возможно выполнение вредоносного кода при загрузке"
                 self.signals.threat_found.emit(
                     r"SYSTEM\CurrentControlSet\Control\Session Manager\BootExecute",
-                    "red", f"BootExecute изменён: {bootexecute_actual}, возможно выполнение вредоносного кода при загрузке")
+                    "red", desc)
                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                     r"SYSTEM\CurrentControlSet\Control\Session Manager",
-                    "BootExecute", "autocheck autochk *", "multisz"))
+                    "BootExecute", ["autocheck", "autochk *"], "multisz", "red", desc))
         
         alt_shell_actual, _ = self.get_reg_value(
             winreg.HKEY_LOCAL_MACHINE,
@@ -363,26 +383,29 @@ class ScanWorker(QThread):
         if alt_shell_actual is not None:
             if isinstance(alt_shell_actual, str):
                 if alt_shell_actual.strip().lower() != "cmd.exe":
+                    desc = f"Альтернативная оболочка SafeBoot: {alt_shell_actual}"
                     self.signals.threat_found.emit(
                         r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
-                        "yellow", f"Альтернативная оболочка SafeBoot: {alt_shell_actual}")
+                        "yellow", desc)
                     self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
                         r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                        "AlternateShell", "cmd.exe", "value"))
+                        "AlternateShell", "cmd.exe", "value", "yellow", desc))
             else:
+                desc = "AlternateShell имеет неверный тип данных"
                 self.signals.threat_found.emit(
                     r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
-                    "yellow", "AlternateShell имеет неверный тип данных")
+                    "yellow", desc)
                 self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
                     r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                    "AlternateShell", "cmd.exe", "value"))
+                    "AlternateShell", "cmd.exe", "value", "yellow", desc))
         else:
+            desc = "Параметр AlternateShell отсутствует"
             self.signals.threat_found.emit(
                 r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
-                "yellow", "Параметр AlternateShell отсутствует")
+                "yellow", desc)
             self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
                 r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                "AlternateShell", "cmd.exe", "value"))
+                "AlternateShell", "cmd.exe", "value", "yellow", desc))
         
         self.check_registry_multisz(
             r"SYSTEM\CurrentControlSet\Control\Lsa",
@@ -405,22 +428,24 @@ class ScanWorker(QThread):
                     subkey = winreg.OpenKey(key, subkey_name, 0, winreg.KEY_READ)
                     try:
                         winreg.QueryValueEx(subkey, "MonitorProcess")
+                        desc = f"Мониторинг завершения процесса {subkey_name} - возможна слежка"
                         self.signals.threat_found.emit(
                             f"SilentProcessExit\\{subkey_name}",
-                            "red", f"Мониторинг завершения процесса {subkey_name} - возможна слежка")
+                            "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                             f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
-                            "MonitorProcess", None, "delete_subkey"))
+                            "MonitorProcess", None, "delete_subkey", "red", desc))
                     except:
                         pass
                     try:
                         winreg.QueryValueEx(subkey, "ReportingMode")
+                        desc = f"Отчёт о завершении процесса {subkey_name} - возможна слежка"
                         self.signals.threat_found.emit(
                             f"SilentProcessExit\\{subkey_name}",
-                            "red", f"Отчёт о завершении процесса {subkey_name} - возможна слежка")
+                            "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                             f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
-                            "ReportingMode", None, "delete_subkey"))
+                            "ReportingMode", None, "delete_subkey", "red", desc))
                     except:
                         pass
                     winreg.CloseKey(subkey)
@@ -474,19 +499,19 @@ class ScanWorker(QThread):
             if actual is not None:
                 if isinstance(actual, str):
                     if actual.strip().lower() != expected.lower():
+                        desc = f"KnownDLL {name} изменён: {actual} вместо {expected}, возможен перехват API"
                         self.signals.threat_found.emit(
-                            f"KnownDLLs\\{name}",
-                            "red", f"KnownDLL {name} изменён: {actual} вместо {expected}, возможен перехват API")
+                            f"KnownDLLs\\{name}", "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                             r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
-                            name, expected, "value"))
+                            name, expected, "value", "red", desc))
                 else:
+                    desc = f"KnownDLL {name} имеет неверный тип данных"
                     self.signals.threat_found.emit(
-                        f"KnownDLLs\\{name}",
-                        "red", f"KnownDLL {name} имеет неверный тип данных")
+                        f"KnownDLLs\\{name}", "red", desc)
                     self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                         r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
-                        name, expected, "value"))
+                        name, expected, "value", "red", desc))
 
         for base in [r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options",
                      r"SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"]:
@@ -500,11 +525,11 @@ class ScanWorker(QThread):
                             subkey = winreg.OpenKey(key, subkey_name, 0, winreg.KEY_READ)
                             try:
                                 debugger, _ = winreg.QueryValueEx(subkey, "Debugger")
+                                desc = f"Отладчик для {subkey_name}: {debugger} - процесс перехватывается"
                                 self.signals.threat_found.emit(
-                                    f"IFEO\\{subkey_name}",
-                                    "red", f"Отладчик для {subkey_name}: {debugger} - процесс перехватывается")
+                                    f"IFEO\\{subkey_name}", "red", desc)
                                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                                    f"{base}\\{subkey_name}", "Debugger", None, "delete_ifeo"))
+                                    f"{base}\\{subkey_name}", "Debugger", None, "delete_ifeo", "red", desc))
                             except:
                                 pass
                             winreg.CloseKey(subkey)
@@ -528,12 +553,13 @@ class ScanWorker(QThread):
             try:
                 val = int(scan_with_av_actual)
                 if val == 0:
+                    desc = "Сканирование вложений антивирусом отключено (значение 0)"
                     self.signals.threat_found.emit(
                         r"Policies\Attachments\ScanWithAntiVirus",
-                        "yellow", "Сканирование вложений антивирусом отключено (значение 0)")
+                        "yellow", desc)
                     self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
                         r"Software\Microsoft\Windows\CurrentVersion\Policies\Attachments",
-                        "ScanWithAntiVirus", "3", "value"))
+                        "ScanWithAntiVirus", "3", "value", "yellow", desc))
             except (ValueError, TypeError):
                 pass
         
@@ -552,19 +578,20 @@ class ScanWorker(QThread):
                             "yellow", desc)
                         self.suspicious.append((hive,
                             r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer",
-                            "NoDriveTypeAutoRun", 0xFF, "value"))
+                            "NoDriveTypeAutoRun", 0xFF, "value", "yellow", desc))
                 except (ValueError, TypeError):
                     pass
         
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                 r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun", 0, winreg.KEY_READ)
+            desc = "Обнаружен раздел DisallowRun - ограничение запуска приложений"
             self.signals.threat_found.emit(
                 r"Policies\Explorer\DisallowRun",
-                "red", "Обнаружен раздел DisallowRun - ограничение запуска приложений")
+                "red", desc)
             self.threats.append((winreg.HKEY_LOCAL_MACHINE,
                 r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun",
-                None, None, "delete_subkey"))
+                None, None, "delete_subkey", "red", desc))
             winreg.CloseKey(key)
         except FileNotFoundError:
             pass
@@ -644,7 +671,7 @@ class ScanWorker(QThread):
                     try:
                         winreg.QueryValueEx(key, policy)
                         self.signals.threat_found.emit(f"Policies\\{sub_key}\\{policy}", "red", desc)
-                        self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\{sub_key}", policy, None, "delete"))
+                        self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\{sub_key}", policy, None, "delete", "red", desc))
                     except:
                         pass
                     winreg.CloseKey(key)
@@ -657,7 +684,7 @@ class ScanWorker(QThread):
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\Attachments\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\Attachments", policy, None, "delete"))
+                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\Attachments", policy, None, "delete", "red", desc))
                 except:
                     pass
                 winreg.CloseKey(key)
@@ -670,7 +697,7 @@ class ScanWorker(QThread):
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\MMC\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\MMC", policy, None, "delete"))
+                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\MMC", policy, None, "delete", "red", desc))
                 except:
                     pass
                 winreg.CloseKey(key)
@@ -684,7 +711,7 @@ class ScanWorker(QThread):
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\ActiveDesktop\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\ActiveDesktop", policy, None, "delete"))
+                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\ActiveDesktop", policy, None, "delete", "red", desc))
                 except:
                     pass
                 winreg.CloseKey(key)
@@ -698,7 +725,7 @@ class ScanWorker(QThread):
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\SystemRestore\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\SystemRestore", policy, None, "delete"))
+                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\SystemRestore", policy, None, "delete", "red", desc))
                 except:
                     pass
                 winreg.CloseKey(key)
@@ -798,6 +825,7 @@ class ScanWorker(QThread):
 class FixWorker(QThread):
     finished = Signal()
     status = Signal(str)
+    fix_log = Signal(str)
     
     def __init__(self, items, fix_type):
         super().__init__()
@@ -812,19 +840,22 @@ class FixWorker(QThread):
         self.finished.emit()
     
     def fix_item(self, item):
-        hive, key_path, value_name, expected, action = item
+        hive, key_path, value_name, expected, action = item[0], item[1], item[2], item[3], item[4]
+        desc = item[-1] if len(item) > 6 and isinstance(item[-1], str) else ""
         
         try:
             if action == "delete":
                 key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE)
                 winreg.DeleteValue(key, value_name)
                 winreg.CloseKey(key)
+                self.fix_log.emit(f"[FIXED] {key_path}\\{value_name} — удалён")
             elif action == "delete_subkey":
                 parent_path = key_path.rsplit('\\', 1)[0]
                 subkey_name = key_path.rsplit('\\', 1)[1]
                 key = winreg.OpenKey(hive, parent_path, 0, winreg.KEY_ALL_ACCESS)
                 winreg.DeleteKey(key, subkey_name)
                 winreg.CloseKey(key)
+                self.fix_log.emit(f"[FIXED] {key_path} — раздел удалён")
             elif action == "delete_ifeo":
                 key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE)
                 try:
@@ -832,6 +863,7 @@ class FixWorker(QThread):
                 except:
                     pass
                 winreg.CloseKey()
+                self.fix_log.emit(f"[FIXED] IFEO\\{key_path} — Debugger удалён")
             elif action == "value":
                 if expected is not None:
                     key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE)
@@ -840,13 +872,18 @@ class FixWorker(QThread):
                     elif isinstance(expected, int):
                         winreg.SetValueEx(key, value_name, 0, winreg.REG_DWORD, expected)
                     winreg.CloseKey(key)
+                    self.fix_log.emit(f"[FIXED] {key_path}\\{value_name} — восстановлено в {expected}")
             elif action == "multisz":
-                if expected is not None and isinstance(expected, list):
+                if expected is not None:
                     key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE)
-                    winreg.SetValueEx(key, value_name, 0, winreg.REG_MULTI_SZ, expected)
+                    if isinstance(expected, list):
+                        winreg.SetValueEx(key, value_name, 0, winreg.REG_MULTI_SZ, expected)
+                    elif isinstance(expected, str):
+                        winreg.SetValueEx(key, value_name, 0, winreg.REG_MULTI_SZ, [expected])
                     winreg.CloseKey(key)
+                    self.fix_log.emit(f"[FIXED] {key_path}\\{value_name} — восстановлено в {expected}")
         except Exception as e:
-            pass
+            self.fix_log.emit(f"[ERROR] {key_path}\\{value_name} — {str(e)}")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -854,6 +891,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Threatbit Simple Scanner | v{VERSION}")
         self.setMinimumSize(950, 550)
         self.resize(950, 600)
+        
+        self.log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.html_log_path = self.log_dir / "ThreatbitHTML.html"
+        self.init_html_log()
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -917,7 +959,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.setStyleSheet("background-color: #1E1E1E; color: white; font-family: 'Consolas';")
         
-        self.scan_page = ScanPage()
+        self.scan_page = ScanPage(self)
         self.tools_page = ToolsPage()
         self.about_page = AboutPage()
         
@@ -938,6 +980,23 @@ class MainWindow(QMainWindow):
         self.update_checker.update_available.connect(self.on_update_available)
         self.update_checker.check_finished.connect(self.on_check_finished)
         self.update_checker.start()
+
+    def init_html_log(self):
+        with open(self.html_log_path, "w", encoding="utf-8") as f:
+            f.write("""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Threatbit Scanner Log</title>
+<style>body{background:#1E1E1E;color:#FFF;font-family:Consolas;padding:20px}
+.red{color:#FF6B6B}.yellow{color:#FFD93D}.green{color:#4CAF50}.time{color:#AAA}
+th,td{padding:8px;border:1px solid #555}th{background:#333}</style></head>
+<body><h1>Threatbit Simple Scanner v""" + VERSION + """</h1>
+<table><tr><th>Время</th><th>Тип</th><th>Действие</th><th>Описание</th></tr>""")
+    
+    def add_html_log(self, row_type, action, description):
+        color_class = "red" if row_type == "red" else "yellow" if row_type == "yellow" else "green"
+        with open(self.html_log_path, "a", encoding="utf-8") as f:
+            f.write(f'<tr><td class="time">{datetime.now().strftime("%H:%M:%S")}</td>'
+                    f'<td class="{color_class}">{row_type.upper()}</td>'
+                    f'<td>{action}</td><td>{description}</td></tr>\n')
 
     def switch_page(self, index):
         self.stacked_widget.setCurrentIndex(index)
@@ -967,8 +1026,9 @@ class MainWindow(QMainWindow):
             self.update_label.setStyleSheet("color: #888888; padding: 4px;")
 
 class ScanPage(QWidget):
-    def __init__(self):
+    def __init__(self, main_window):
         super().__init__()
+        self.main_window = main_window
         self.worker = None
         self.fix_worker = None
         self.threats_list = []
@@ -987,7 +1047,7 @@ class ScanPage(QWidget):
         checks = [
             ("Удалять все вредоносные (красные) элементы", "remove_red", True),
             ("Удалять все подозрительные (жёлтые) элементы", "remove_yellow", False),
-            ("Выполнить логирование действий в Documents (ThreatScan.log)", "log_enabled", False),
+            ("Выполнить логирование действий в Documents", "log_enabled", True),
             ("Восстановить UAC на полный доступ", "restore_uac", True),
             ("Сбросить схемы электропитания", "reset_power", False),
             ("Включить полную функцию Defender", "enable_defender", True),
@@ -1136,10 +1196,13 @@ class ScanPage(QWidget):
             self.threats_list.append(path)
         else:
             self.suspicious_list.append(path)
+        self.main_window.add_html_log(threat_type, "Обнаружено", f"{path} — {description}")
 
     def log_message(self, msg):
         if self.checkboxes.get("log_enabled", None) and self.checkboxes["log_enabled"].isChecked():
-            log_path = Path.home() / "Documents" / "ThreatScan.log"
+            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "Threatbit.log"
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"[{datetime.now().isoformat()}] {msg}\n")
 
@@ -1222,7 +1285,17 @@ class ScanPage(QWidget):
         self.fix_worker = FixWorker(items, fix_type)
         self.fix_worker.status.connect(self.status_label.setText)
         self.fix_worker.finished.connect(lambda: self.fix_finished(fix_type))
+        self.fix_worker.fix_log.connect(self.on_fix_log)
         self.fix_worker.start()
+
+    def on_fix_log(self, msg):
+        if self.checkboxes.get("log_enabled", False):
+            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "Threatbit.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+        self.main_window.add_html_log("green", "Исправлено", msg.replace("[FIXED] ", "").replace("[ERROR] ", "ОШИБКА: "))
 
     def fix_finished(self, fix_type):
         self.progress_bar.setValue(100)
