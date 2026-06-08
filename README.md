@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" width="128" alt="Threatbit Simple Scanner">
+  <img src="logo.png" width="128" alt="Threatbit Simple Scanner">
 </p>
 
 # 🛡️ Threatbit Simple Scanner
