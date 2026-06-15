@@ -1,18 +1,35 @@
+<div align="center">
+  
 <p align="center">
-  <img src="logo.png" width="128" alt="Threatbit Simple Scanner">
+  <img src="logo.png" width="256" alt="DeNuitkanizator">
 </p>
 
-# 🛡️ Threatbit Simple Scanner
+<br>
+<h1>🛡 Threatbit Simple Scanner</h1>
+<h4>Бесплатная утилита для сканирования и восстановления системы после вирусных атак с открытым исходным кодом. Находит и удаляет вредоносные изменения в реестре Windows (записи, которые могут мешать работе компьютера), которые пропускают обычные антивирусы.</h4>
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![PySide6](https://img.shields.io/badge/PySide6-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white)
-![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white)
+![PySide6](https://img.shields.io/badge/PySide6-6CBD8B?style=for-the-badge&logo=Qt&logoColor=white)
+![Nuitka](https://img.shields.io/badge/Nuitka-2D2D2D?style=for-the-badge&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 ![Version](https://img.shields.io/badge/version-1.2-blue)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/m/2M12/ThreatbitSimpleScanner?style=for-the-badge)
+![GitHub stars](https://img.shields.io/github/stars/2M12/ThreatbitSimpleScanner?style=for-the-badge)
+![GitHub watchers](https://img.shields.io/github/watchers/2M12/ThreatbitSimpleScanner?style=for-the-badge)
+![GitHub repo size](https://img.shields.io/github/repo-size/2M12/ThreatbitSimpleScanner?style=for-the-badge)
 
-Threatbit Simple Scanner - бесплатная утилита для сканирования и восстановления системы после вирусных атак с открытым **исходным кодом**. Находит и удаляет вредоносные изменения в реестре Windows (записи, которые могут мешать работе компьютера), которые пропускают обычные антивирусы.
+<p align="center">
+  <img src="thumbnail.png" width="700" alt="ThreatbitSimpleScanner">
+</p>
 
-## ‼ Перед запуском программы ознакомьтесь с [EULA.md](https://github.com/2M12/ThreatbitSimpleScanner/blob/main/EULA.md)
+</div>
+
+<br>
+
+
+---
+>[!WARNING]
+>## ‼ Перед запуском программы ознакомьтесь с [EULA.md](https://github.com/2M12/ThreatbitSimpleScanner/blob/main/EULA.md)
 
 > [!CAUTION]
 > 
