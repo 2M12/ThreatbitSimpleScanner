@@ -16,7 +16,7 @@
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/2M12/ThreatbitSimpleScanner?style=for-the-badge)
 ![GitHub stars](https://img.shields.io/github/stars/2M12/ThreatbitSimpleScanner?style=for-the-badge)
 ![GitHub watchers](https://img.shields.io/github/watchers/2M12/ThreatbitSimpleScanner?style=for-the-badge)
-![GitHub repo size](https://img.shields.io/github/repo-size/2M12/ThreatbitSimpleScanner?style=for-the-badge)
+
 
 <p align="center">
   <img src="thumbnail.png" width="700" alt="ThreatbitSimpleScanner">
