@@ -89,6 +89,24 @@ cd ThreatbitSimpleScanner
 pip install -r requirements.txt
 python main.py
 ```
+---
+
+## 🖼️ Скриншоты
+
+<p align="center">
+  <img src="main_menu.png" width="700" alt="Главное меню">
+  <br><em>Главное меню </em>
+</p>
+
+<p align="center">
+  <img src="manual_instuments.png" width="700" alt="Главное меню">
+  <br><em>Ручные инструменты</em>
+</p>
+
+<p align="center">
+  <img src="example_threats.png" width="700" alt="Главное меню">
+  <br><em>Пример угроз</em>
+</p>
 
 ## Как использовать (важный порядок)
 
