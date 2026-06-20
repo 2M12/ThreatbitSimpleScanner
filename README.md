@@ -117,6 +117,12 @@ python main.py
   <img src="txt_log.png" width="700" alt="Главное меню">
   <br><em>Пример логирования в text</em>
 </p>
+---
+
+## Пример работы
+<p align="center">
+  <img src="example.gif" width="900" alt="ThreatbitScanner Example">
+</p>
 
 ## Как использовать (важный порядок)
 
