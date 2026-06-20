@@ -108,6 +108,16 @@ python main.py
   <br><em>Пример угроз</em>
 </p>
 
+<p align="center">
+  <img src="html_log.png" width="700" alt="Главное меню">
+  <br><em>Пример HTML-логов</em>
+</p>
+
+<p align="center">
+  <img src="txt_log.png" width="700" alt="Главное меню">
+  <br><em>Пример логирования в text</em>
+</p>
+
 ## Как использовать (важный порядок)
 
 ### 🔴 Шаг 1. Лечим опасные угрозы (красные)
