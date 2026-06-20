@@ -118,15 +118,6 @@ python main.py
   <br><em>Пример логирования в text</em>
 </p>
 
----
-
-## Пример работы
-<p align="center">
-  <img src="example.gif" width="900" alt="ThreatbitScanner Example">
-</p>
-
----
-
 ## Как использовать (важный порядок)
 
 ### 🔴 Шаг 1. Лечим опасные угрозы (красные)
