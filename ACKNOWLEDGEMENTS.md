@@ -12,8 +12,8 @@
 ## 💡 Идеи и новые подходы
 Те, кто предлагал отличные идеи и имеел оригинальные подходы к улучшению программы.
 
-[@dTi](https://habr.com/ru/users/dTi) - Regback
-[@steelfactor](https://habr.com/ru/users/steelfactor) - NtEnumerateKey и поиск подозрительных строк
+* [@dTi](https://habr.com/ru/users/dTi) - Regback
+* [@steelfactor](https://habr.com/ru/users/steelfactor) - NtEnumerateKey и поиск подозрительных строк
 
 ## 🐛 Тестирование и баг-репорты
 Те, кто находил неполадки и помогал их воспроизвести.
