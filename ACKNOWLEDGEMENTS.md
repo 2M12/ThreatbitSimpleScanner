@@ -12,7 +12,7 @@
 ## 💡 Идеи и новые подходы
 Те, кто предлагал отличные идеи и имеел оригинальные подходы к улучшению программы.
 
-* [@dTi](https://habr.com/ru/users/dTi) - Regback
+* [@dTi](https://habr.com/ru/users/dTi) - идея авто-бэкапа с интеграцией Regback
 * [@steelfactor](https://habr.com/ru/users/steelfactor) - NtEnumerateKey и поиск подозрительных строк
 
 ## 🐛 Тестирование и баг-репорты
