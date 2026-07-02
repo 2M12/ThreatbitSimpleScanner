@@ -33,7 +33,7 @@ import win32file
 import wmi
 import psutil
 
-VERSION = "1.2"
+VERSION = "1.2.1"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
 DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
@@ -862,7 +862,7 @@ class FixWorker(QThread):
                     winreg.DeleteValue(key, value_name)
                 except:
                     pass
-                winreg.CloseKey()
+                winreg.CloseKey(key)
                 self.fix_log.emit(f"[FIXED] IFEO\\{key_path} — Debugger удалён")
             elif action == "value":
                 if expected is not None:
@@ -1693,13 +1693,14 @@ class RegistryRunPage(QWidget):
                 except:
                     pass
 
+
 class ScheduledTasksPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        
+
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Имя задачи", "Состояние", "Следующий запуск", "Триггеры"])
+        self.tree.setHeaderLabels(["Имя задачи", "Состояние", "Следующий запуск", "Триггеры", "Автор", "Описание"])
         self.tree.setFont(QFont("Consolas", 9))
         self.tree.setStyleSheet("""
             QTreeWidget {
@@ -1721,36 +1722,109 @@ class ScheduledTasksPage(QWidget):
         self.tree.header().setStretchLastSection(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
-        
+        self.tree.setRootIsDecorated(True)
+
         layout.addWidget(self.tree)
         self.load_tasks()
+
+    def _get_trigger_string(self, trigger):
+        try:
+            trigger_type = trigger.Type
+            type_names = {
+                0: "Событие",
+                1: "Ежедневно",
+                2: "Еженедельно",
+                3: "Ежемесячно",
+                4: "ЕжемесячноDOW",
+                5: "При простое",
+                6: "При загрузке",
+                7: "При регистрации",
+                8: "При входе",
+                9: "При старте системы",
+                10: "При простое",
+                11: "При подключении",
+                12: "При разблокировке",
+            }
+            return type_names.get(trigger_type, f"Тип {trigger_type}")
+        except:
+            return "N/A"
 
     def load_tasks(self):
         self.tree.clear()
         try:
-            result = subprocess.run(
-                ["schtasks", "/query", "/fo", "CSV", "/v", "/nh"],
-                capture_output=True, text=True, encoding='cp866', errors='ignore', shell=True
-            )
-            lines = result.stdout.strip().split('\n')
-            for line in lines:
-                if line.strip():
-                    parts = [p.strip('"') for p in line.split('","')]
-                    if len(parts) >= 4:
-                        task_name = parts[0]
-                        status = parts[2] if len(parts) > 2 else "Unknown"
-                        next_run = parts[3] if len(parts) > 3 else "N/A"
-                        triggers = parts[4] if len(parts) > 4 else "N/A"
-                        item = QTreeWidgetItem([task_name, status, next_run, triggers])
-                        self.tree.addTopLevelItem(item)
+            import pythoncom
+            from win32com.client import Dispatch
+
+            pythoncom.CoInitialize()
+            scheduler = Dispatch('Schedule.Service')
+            scheduler.Connect()
+            root_folder = scheduler.GetFolder('\\')
+            self._add_tasks_from_folder(root_folder, None)
+            pythoncom.CoUninitialize()
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить задачи: {str(e)}")
+
+    def _add_tasks_from_folder(self, folder, parent_item):
+        try:
+            tasks = folder.GetTasks(1)
+            for task in tasks:
+                name = task.Name
+                path = task.Path
+
+                state_map = {0: "Unknown", 1: "Disabled", 2: "Queued", 3: "Ready", 4: "Running"}
+                state = state_map.get(task.State, "Unknown")
+
+                next_run = "N/A"
+                try:
+                    if task.NextRunTime:
+                        next_run = task.NextRunTime.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+
+                triggers_list = []
+                try:
+                    for trigger in task.Definition.Triggers:
+                        triggers_list.append(self._get_trigger_string(trigger))
+                except:
+                    pass
+                triggers_str = ", ".join(triggers_list) if triggers_list else "N/A"
+
+                author = "N/A"
+                description = "N/A"
+                try:
+                    author = task.Definition.Principal.UserId
+                except:
+                    pass
+                try:
+                    description = task.Definition.RegistrationInfo.Description
+                except:
+                    pass
+
+                item = QTreeWidgetItem([name, state, next_run, triggers_str, author, description])
+                item.setData(0, Qt.UserRole, path)
+
+                if parent_item:
+                    parent_item.addChild(item)
+                else:
+                    self.tree.addTopLevelItem(item)
+
+            subfolders = folder.GetFolders(0)
+            for subfolder in subfolders:
+                if parent_item:
+                    folder_item = QTreeWidgetItem(parent_item, [subfolder.Name, "", "", "", "", ""])
+                else:
+                    folder_item = QTreeWidgetItem(self.tree, [subfolder.Name, "", "", "", "", ""])
+                self._add_tasks_from_folder(subfolder, folder_item)
+        except:
+            pass
 
     def show_context_menu(self, pos):
         item = self.tree.itemAt(pos)
         if not item:
             return
-        
+
+        task_path = item.data(0, Qt.UserRole)
+
         menu = QMenu(self)
         menu.setFont(QFont("Consolas", 9))
         menu.setStyleSheet("""
@@ -1763,39 +1837,98 @@ class ScheduledTasksPage(QWidget):
                 background-color: #007ACC;
             }
         """)
-        
-        enable_action = menu.addAction("Включить")
-        disable_action = menu.addAction("Отключить")
-        run_action = menu.addAction("Запустить")
-        end_action = menu.addAction("Завершить")
-        delete_action = menu.addAction("Удалить")
-        
+
+        if task_path:
+            enable_action = menu.addAction("Включить")
+            disable_action = menu.addAction("Отключить")
+            run_action = menu.addAction("Запустить")
+            end_action = menu.addAction("Завершить")
+            menu.addSeparator()
+            export_action = menu.addAction("Экспортировать")
+            props_action = menu.addAction("Свойства")
+            menu.addSeparator()
+            delete_action = menu.addAction("Удалить")
+        else:
+            return
+
         action = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        task_name = item.text(0)
-        
+
         if action == enable_action:
-            subprocess.run(["schtasks", "/change", "/tn", task_name, "/enable"], 
-                         capture_output=True, encoding='cp866', errors='ignore', shell=True)
+            subprocess.run(["schtasks", "/change", "/tn", task_path, "/enable"],
+                           capture_output=True, encoding='cp866', errors='ignore', shell=True)
             self.load_tasks()
         elif action == disable_action:
-            subprocess.run(["schtasks", "/change", "/tn", task_name, "/disable"], 
-                         capture_output=True, encoding='cp866', errors='ignore', shell=True)
+            subprocess.run(["schtasks", "/change", "/tn", task_path, "/disable"],
+                           capture_output=True, encoding='cp866', errors='ignore', shell=True)
             self.load_tasks()
         elif action == run_action:
-            subprocess.run(["schtasks", "/run", "/tn", task_name], 
-                         capture_output=True, encoding='cp866', errors='ignore', shell=True)
+            subprocess.run(["schtasks", "/run", "/tn", task_path],
+                           capture_output=True, encoding='cp866', errors='ignore', shell=True)
         elif action == end_action:
-            subprocess.run(["schtasks", "/end", "/tn", task_name], 
-                         capture_output=True, encoding='cp866', errors='ignore', shell=True)
+            subprocess.run(["schtasks", "/end", "/tn", task_path],
+                           capture_output=True, encoding='cp866', errors='ignore', shell=True)
+        elif action == export_action:
+            file_path, _ = QFileDialog.getSaveFileName(self, "Экспорт задачи",
+                                                       f"{item.text(0)}.xml", "XML Files (*.xml)")
+            if file_path:
+                result = subprocess.run(["schtasks", "/query", "/tn", task_path, "/xml"],
+                                        capture_output=True, text=True, encoding='cp866', errors='ignore', shell=True)
+                if result.stdout:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(result.stdout)
+        elif action == props_action:
+            result = subprocess.run(["schtasks", "/query", "/tn", task_path, "/v", "/fo", "LIST"],
+                                    capture_output=True, text=True, encoding='cp866', errors='ignore', shell=True)
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Свойства задачи: {item.text(0)}")
+            dialog.setMinimumSize(600, 500)
+            dialog.resize(700, 600)
+
+            layout = QVBoxLayout(dialog)
+
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
+            text_edit.setFont(QFont("Consolas", 9))
+            text_edit.setStyleSheet("""
+                QTextEdit {
+                    background-color: #252526;
+                    color: white;
+                    border: 1px solid #555;
+                    font-family: 'Consolas';
+                }
+            """)
+            text_edit.setPlainText(result.stdout if result.stdout else "Нет данных")
+
+            layout.addWidget(text_edit)
+
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+            button_box.accepted.connect(dialog.accept)
+            button_box.setStyleSheet("""
+                QPushButton {
+                    background-color: #007ACC;
+                    color: white;
+                    padding: 8px 16px;
+                    border: none;
+                    border-radius: 4px;
+                    font-family: 'Consolas';
+                }
+                QPushButton:hover {
+                    background-color: #0098FF;
+                }
+            """)
+
+            layout.addWidget(button_box)
+
+            dialog.exec()
         elif action == delete_action:
             reply = QMessageBox.question(self, "Подтверждение",
-                f"Вы уверены, что хотите удалить задачу {task_name}?",
-                QMessageBox.Yes | QMessageBox.No)
+                                         f"Вы уверены, что хотите удалить задачу\n{item.text(0)}?",
+                                         QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
-                subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], 
-                             capture_output=True, encoding='cp866', errors='ignore', shell=True)
+                subprocess.run(["schtasks", "/delete", "/tn", task_path, "/f"],
+                               capture_output=True, encoding='cp866', errors='ignore', shell=True)
                 self.load_tasks()
-
 class AboutPage(QWidget):
     def __init__(self):
         super().__init__()
