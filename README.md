@@ -12,7 +12,7 @@
 ![PySide6](https://img.shields.io/badge/PySide6-6CBD8B?style=for-the-badge&logo=Qt&logoColor=white)
 ![Nuitka](https://img.shields.io/badge/Nuitka-2D2D2D?style=for-the-badge&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Version](https://img.shields.io/badge/version-1.2-blue)
+![Version](https://img.shields.io/badge/version-1.2.1-blue)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/2M12/ThreatbitSimpleScanner?style=for-the-badge)
 ![GitHub stars](https://img.shields.io/github/stars/2M12/ThreatbitSimpleScanner?style=for-the-badge)
 ![GitHub watchers](https://img.shields.io/github/watchers/2M12/ThreatbitSimpleScanner?style=for-the-badge)
