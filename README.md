@@ -167,8 +167,8 @@ python main.py
 
 ## ☑️ Hash-суммы
 ```bash
-MD5	9c83e0a05979dd46bbe45e6a7634683d
-SHA-256	1f7791fe4d434bb9aa61e87046c58c85483b8d6c40476eb7f5af4ab07fb697b6
+MD5	73d8add71cfcf117092e62d2a1178515
+SHA-256	70bc5f1dad0a6d8deba194c8f724070ce3fbb6b29bca7a2a83e48147410f19db
 ```
 ## 📜 Лицензия
 MIT © 2026 Mikhail (2M12) / ThreatBit
