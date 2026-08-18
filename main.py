@@ -12,6 +12,8 @@ import json
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import base64
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -30,15 +32,18 @@ import win32api
 import win32con
 import win32net
 import win32file
+import win32crypt
 import wmi
 import psutil
 
-VERSION = "1.2.1"
+VERSION = "1.3"
 GITHUB_RELEASES_URL = "https://api.github.com/repos/2M12/ThreatbitSimpleScanner/releases/latest"
 DOWNLOAD_URL = "https://github.com/2M12/ThreatbitSimpleScanner/releases/latest"
 
+
 def random_process_name(length=10):
     return ''.join(random.choice(string.ascii_letters) for _ in range(length))
+
 
 def is_admin():
     try:
@@ -46,10 +51,12 @@ def is_admin():
     except:
         return False
 
+
 def run_as_admin():
     ctypes.windll.shell32.ShellExecuteW(
         None, "runas", sys.executable, " ".join(sys.argv), None, 1
     )
+
 
 def is_winpe():
     try:
@@ -60,11 +67,14 @@ def is_winpe():
     except:
         return False
 
+
 def load_hive(path, name):
     subprocess.run(["reg", "load", f"HKLM\\{name}", path], capture_output=True, check=False)
 
+
 def unload_hive(name):
     subprocess.run(["reg", "unload", f"HKLM\\{name}"], capture_output=True, check=False)
+
 
 def check_for_updates():
     try:
@@ -78,16 +88,18 @@ def check_for_updates():
     except:
         return None, VERSION, DOWNLOAD_URL
 
+
 class UpdateChecker(QThread):
     update_available = Signal(str, str)
     check_finished = Signal(object)
-    
+
     def run(self):
         result = check_for_updates()
         has_update, latest, url = result if result else (None, VERSION, DOWNLOAD_URL)
         if has_update:
             self.update_available.emit(latest, url)
         self.check_finished.emit(has_update)
+
 
 class WorkerSignals(QObject):
     progress = Signal(int)
@@ -97,12 +109,13 @@ class WorkerSignals(QObject):
     log = Signal(str)
     fix_log = Signal(str)
 
+
 class ScanWorker(QThread):
     def __init__(self, options, parent=None):
         super().__init__(parent)
         self.options = options
         self.signals = WorkerSignals()
-        self.total_steps = 9
+        self.total_steps = 10
         self.current_step = 0
         self.threats = []
         self.suspicious = []
@@ -112,6 +125,7 @@ class ScanWorker(QThread):
         steps = [
             self.scan_autorun,
             self.scan_policies,
+            self.scan_signatures,
             self.restore_uac,
             self.enable_defender,
             self.restore_associations,
@@ -120,13 +134,13 @@ class ScanWorker(QThread):
             self.reset_network,
             self.restore_mbr,
         ]
-        
+
         sfc_future = None
         net_future = None
         mbr_future = None
-        
+
         for i, step in enumerate(steps):
-            if i < 2:
+            if i < 3:
                 step()
             elif step == self.run_sfc and self.options.get("run_sfc", False):
                 sfc_future = self._executor.submit(self._run_sfc_parallel)
@@ -138,14 +152,14 @@ class ScanWorker(QThread):
                 step()
             self.current_step += 1
             self.signals.progress.emit(int((self.current_step / self.total_steps) * 100))
-        
+
         if sfc_future:
             sfc_future.result()
         if net_future:
             net_future.result()
         if mbr_future:
             mbr_future.result()
-        
+
         self._executor.shutdown(wait=True)
         self.signals.finished.emit(self.threats, self.suspicious)
 
@@ -185,7 +199,7 @@ class ScanWorker(QThread):
     def log_action(self, msg):
         self.signals.log.emit(msg)
         if self.options.get("log_enabled", False):
-            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir = Path.home() / "Documents" / "Threatbit" / "Logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / "Threatbit.log"
             with open(log_path, "a", encoding="utf-8") as f:
@@ -206,11 +220,12 @@ class ScanWorker(QThread):
         except Exception:
             return None, None
 
-    def check_registry_value(self, key_path, value_name, expected, hive=winreg.HKEY_LOCAL_MACHINE, is_red=True, description=""):
+    def check_registry_value(self, key_path, value_name, expected, hive=winreg.HKEY_LOCAL_MACHINE, is_red=True,
+                             description=""):
         actual, reg_type = self.get_reg_value(hive, key_path, value_name)
         if actual is None:
             return
-        
+
         threat_found = False
         if isinstance(expected, str):
             if isinstance(actual, str):
@@ -224,7 +239,7 @@ class ScanWorker(QThread):
                     threat_found = True
             except (ValueError, TypeError):
                 threat_found = True
-        
+
         if threat_found:
             threat_type = "red" if is_red else "yellow"
             desc = description if description else f"Ожидалось: {expected}, найдено: {actual}"
@@ -256,11 +271,12 @@ class ScanWorker(QThread):
         except FileNotFoundError:
             pass
 
-    def check_registry_multisz(self, key_path, value_name, expected_list, hive=winreg.HKEY_LOCAL_MACHINE, description="", is_red=True):
+    def check_registry_multisz(self, key_path, value_name, expected_list, hive=winreg.HKEY_LOCAL_MACHINE,
+                               description="", is_red=True):
         actual, reg_type = self.get_reg_value(hive, key_path, value_name)
         if actual is None:
             return
-        
+
         threat_found = False
         if isinstance(actual, list):
             actual_normalized = [item.strip().lower() for item in actual]
@@ -274,7 +290,7 @@ class ScanWorker(QThread):
                 threat_found = True
         else:
             threat_found = True
-        
+
         if threat_found:
             desc = description if description else f"Ожидалось: {expected_list}, найдено: {actual}"
             threat_type = "red" if is_red else "yellow"
@@ -289,13 +305,13 @@ class ScanWorker(QThread):
     def scan_autorun(self):
         self.signals.status.emit("Сканирование автозапуска...")
         self.log_action("Начало сканирования автозапуска")
-        
+
         self.check_registry_value(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
             "Shell", "explorer.exe",
             description="Оболочка Windows изменена, возможна подмена проводника"
         )
-        
+
         userinit_actual, _ = self.get_reg_value(
             winreg.HKEY_LOCAL_MACHINE,
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
@@ -310,17 +326,17 @@ class ScanWorker(QThread):
                         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit",
                         "red", desc)
                     self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-                        "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
+                                         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                                         "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
             else:
                 desc = "Userinit имеет неверный тип данных"
                 self.signals.threat_found.emit(
                     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit",
                     "red", desc)
                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-                    "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
-        
+                                     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                                     "Userinit", r"C:\Windows\system32\userinit.exe,", "value", "red", desc))
+
         self.check_registry_value(
             r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows",
             "AppInit_DLLs", "",
@@ -346,7 +362,7 @@ class ScanWorker(QThread):
             "AppCertDlls",
             description="AppCertDlls используется для внедрения DLL через сертификаты"
         )
-        
+
         bootexecute_actual, reg_type = self.get_reg_value(
             winreg.HKEY_LOCAL_MACHINE,
             r"SYSTEM\CurrentControlSet\Control\Session Manager",
@@ -365,16 +381,16 @@ class ScanWorker(QThread):
                         threat_found = True
             else:
                 threat_found = True
-            
+
             if threat_found:
                 desc = f"BootExecute изменён: {bootexecute_actual}, возможно выполнение вредоносного кода при загрузке"
                 self.signals.threat_found.emit(
                     r"SYSTEM\CurrentControlSet\Control\Session Manager\BootExecute",
                     "red", desc)
                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\Session Manager",
-                    "BootExecute", ["autocheck", "autochk *"], "multisz", "red", desc))
-        
+                                     r"SYSTEM\CurrentControlSet\Control\Session Manager",
+                                     "BootExecute", ["autocheck", "autochk *"], "multisz", "red", desc))
+
         alt_shell_actual, _ = self.get_reg_value(
             winreg.HKEY_LOCAL_MACHINE,
             r"SYSTEM\CurrentControlSet\Control\SafeBoot",
@@ -388,25 +404,25 @@ class ScanWorker(QThread):
                         r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
                         "yellow", desc)
                     self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
-                        r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                        "AlternateShell", "cmd.exe", "value", "yellow", desc))
+                                            r"SYSTEM\CurrentControlSet\Control\SafeBoot",
+                                            "AlternateShell", "cmd.exe", "value", "yellow", desc))
             else:
                 desc = "AlternateShell имеет неверный тип данных"
                 self.signals.threat_found.emit(
                     r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
                     "yellow", desc)
                 self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                    "AlternateShell", "cmd.exe", "value", "yellow", desc))
+                                        r"SYSTEM\CurrentControlSet\Control\SafeBoot",
+                                        "AlternateShell", "cmd.exe", "value", "yellow", desc))
         else:
             desc = "Параметр AlternateShell отсутствует"
             self.signals.threat_found.emit(
                 r"SYSTEM\CurrentControlSet\Control\SafeBoot\AlternateShell",
                 "yellow", desc)
             self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
-                r"SYSTEM\CurrentControlSet\Control\SafeBoot",
-                "AlternateShell", "cmd.exe", "value", "yellow", desc))
-        
+                                    r"SYSTEM\CurrentControlSet\Control\SafeBoot",
+                                    "AlternateShell", "cmd.exe", "value", "yellow", desc))
+
         self.check_registry_multisz(
             r"SYSTEM\CurrentControlSet\Control\Lsa",
             "Authentication Packages", ["msv1_0"],
@@ -417,10 +433,10 @@ class ScanWorker(QThread):
             "Notification Packages", ["scecli"],
             description="Пакеты уведомлений LSA изменены"
         )
-        
+
         try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
-                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit", 0, winreg.KEY_READ)
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit", 0, winreg.KEY_READ)
             index = 0
             while True:
                 try:
@@ -433,8 +449,8 @@ class ScanWorker(QThread):
                             f"SilentProcessExit\\{subkey_name}",
                             "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                            f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
-                            "MonitorProcess", None, "delete_subkey", "red", desc))
+                                             f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
+                                             "MonitorProcess", None, "delete_subkey", "red", desc))
                     except:
                         pass
                     try:
@@ -444,8 +460,8 @@ class ScanWorker(QThread):
                             f"SilentProcessExit\\{subkey_name}",
                             "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                            f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
-                            "ReportingMode", None, "delete_subkey", "red", desc))
+                                             f"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit\\{subkey_name}",
+                                             "ReportingMode", None, "delete_subkey", "red", desc))
                     except:
                         pass
                     winreg.CloseKey(subkey)
@@ -471,7 +487,7 @@ class ScanWorker(QThread):
             "windir", "%SystemRoot%",
             description="Переменная windir изменена"
         )
-        
+
         known_dlls = {
             "_wow64cpu": "wow64cpu.dll", "_wowarmhw": "wowarmhw.dll",
             "_xtajit": "xtajit.dll", "advapi32": "advapi32.dll",
@@ -503,15 +519,15 @@ class ScanWorker(QThread):
                         self.signals.threat_found.emit(
                             f"KnownDLLs\\{name}", "red", desc)
                         self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                            r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
-                            name, expected, "value", "red", desc))
+                                             r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
+                                             name, expected, "value", "red", desc))
                 else:
                     desc = f"KnownDLL {name} имеет неверный тип данных"
                     self.signals.threat_found.emit(
                         f"KnownDLLs\\{name}", "red", desc)
                     self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                        r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
-                        name, expected, "value", "red", desc))
+                                         r"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs",
+                                         name, expected, "value", "red", desc))
 
         for base in [r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options",
                      r"SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"]:
@@ -529,7 +545,8 @@ class ScanWorker(QThread):
                                 self.signals.threat_found.emit(
                                     f"IFEO\\{subkey_name}", "red", desc)
                                 self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                                    f"{base}\\{subkey_name}", "Debugger", None, "delete_ifeo", "red", desc))
+                                                     f"{base}\\{subkey_name}", "Debugger", None, "delete_ifeo", "red",
+                                                     desc))
                             except:
                                 pass
                             winreg.CloseKey(subkey)
@@ -543,7 +560,7 @@ class ScanWorker(QThread):
     def scan_policies(self):
         self.signals.status.emit("Сканирование Policies...")
         self.log_action("Начало сканирования Policies")
-        
+
         scan_with_av_actual, _ = self.get_reg_value(
             winreg.HKEY_LOCAL_MACHINE,
             r"Software\Microsoft\Windows\CurrentVersion\Policies\Attachments",
@@ -558,11 +575,11 @@ class ScanWorker(QThread):
                         r"Policies\Attachments\ScanWithAntiVirus",
                         "yellow", desc)
                     self.suspicious.append((winreg.HKEY_LOCAL_MACHINE,
-                        r"Software\Microsoft\Windows\CurrentVersion\Policies\Attachments",
-                        "ScanWithAntiVirus", "3", "value", "yellow", desc))
+                                            r"Software\Microsoft\Windows\CurrentVersion\Policies\Attachments",
+                                            "ScanWithAntiVirus", "3", "value", "yellow", desc))
             except (ValueError, TypeError):
                 pass
-        
+
         for hive, hive_name in [(winreg.HKEY_LOCAL_MACHINE, "HKLM"), (winreg.HKEY_CURRENT_USER, "HKCU")]:
             actual, _ = self.get_reg_value(
                 hive,
@@ -577,25 +594,26 @@ class ScanWorker(QThread):
                             f"Policies\\Explorer\\NoDriveTypeAutoRun ({hive_name})",
                             "yellow", desc)
                         self.suspicious.append((hive,
-                            r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer",
-                            "NoDriveTypeAutoRun", 0xFF, "value", "yellow", desc))
+                                                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer",
+                                                "NoDriveTypeAutoRun", 0xFF, "value", "yellow", desc))
                 except (ValueError, TypeError):
                     pass
-        
+
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun", 0, winreg.KEY_READ)
+                                 r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun", 0,
+                                 winreg.KEY_READ)
             desc = "Обнаружен раздел DisallowRun - ограничение запуска приложений"
             self.signals.threat_found.emit(
                 r"Policies\Explorer\DisallowRun",
                 "red", desc)
             self.threats.append((winreg.HKEY_LOCAL_MACHINE,
-                r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun",
-                None, None, "delete_subkey", "red", desc))
+                                 r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\DisallowRun",
+                                 None, None, "delete_subkey", "red", desc))
             winreg.CloseKey(key)
         except FileNotFoundError:
             pass
-        
+
         policies_path = r"Software\Microsoft\Windows\CurrentVersion\Policies"
         system_policies = {
             "DisableTaskMgr": "Диспетчер задач отключён",
@@ -662,7 +680,7 @@ class ScanWorker(QThread):
             "NoNetSetupSecurityPage": "Безопасность сети скрыта",
             "NoNetConnectDisconnect": "Подключение/отключение сети скрыто"
         }
-        
+
         for policy_dict, sub_key in [(system_policies, "System"), (explorer_policies, "Explorer"),
                                      (network_policies, "Network")]:
             for policy, desc in policy_dict.items():
@@ -671,66 +689,147 @@ class ScanWorker(QThread):
                     try:
                         winreg.QueryValueEx(key, policy)
                         self.signals.threat_found.emit(f"Policies\\{sub_key}\\{policy}", "red", desc)
-                        self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\{sub_key}", policy, None, "delete", "red", desc))
+                        self.threats.append(
+                            (winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\{sub_key}", policy, None, "delete", "red",
+                             desc))
                     except:
                         pass
                     winreg.CloseKey(key)
                 except:
                     pass
-        
+
         for policy, desc in [("HideZoneInfoOnProperties", "Информация о зоне в свойствах файла скрыта")]:
             try:
                 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\Attachments", 0, winreg.KEY_READ)
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\Attachments\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\Attachments", policy, None, "delete", "red", desc))
+                    self.threats.append(
+                        (winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\Attachments", policy, None, "delete", "red",
+                         desc))
                 except:
                     pass
                 winreg.CloseKey(key)
             except:
                 pass
-        
+
         for policy, desc in [("RestrictToPermittedSnapins", "MMC оснастки ограничены")]:
             try:
                 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\MMC", 0, winreg.KEY_READ)
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\MMC\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\MMC", policy, None, "delete", "red", desc))
+                    self.threats.append(
+                        (winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\MMC", policy, None, "delete", "red", desc))
                 except:
                     pass
                 winreg.CloseKey(key)
             except:
                 pass
-        
+
         for policy, desc in [("NoChangingWallPaper", "Смена обоев ActiveDesktop запрещена"),
-                              ("NoHTMLWallPaper", "HTML обои отключены")]:
+                             ("NoHTMLWallPaper", "HTML обои отключены")]:
             try:
                 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\ActiveDesktop", 0, winreg.KEY_READ)
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\ActiveDesktop\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\ActiveDesktop", policy, None, "delete", "red", desc))
+                    self.threats.append(
+                        (winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\ActiveDesktop", policy, None, "delete", "red",
+                         desc))
                 except:
                     pass
                 winreg.CloseKey(key)
             except:
                 pass
-        
+
         for policy, desc in [("DisableSR", "Восстановление системы отключено"),
-                              ("DisableConfig", "Настройка восстановления системы отключена")]:
+                             ("DisableConfig", "Настройка восстановления системы отключена")]:
             try:
                 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\SystemRestore", 0, winreg.KEY_READ)
                 try:
                     winreg.QueryValueEx(key, policy)
                     self.signals.threat_found.emit(f"Policies\\SystemRestore\\{policy}", "red", desc)
-                    self.threats.append((winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\SystemRestore", policy, None, "delete", "red", desc))
+                    self.threats.append(
+                        (winreg.HKEY_LOCAL_MACHINE, f"{policies_path}\\SystemRestore", policy, None, "delete", "red",
+                         desc))
                 except:
                     pass
                 winreg.CloseKey(key)
             except:
                 pass
+
+    def scan_signatures(self):
+        self.signals.status.emit("Проверка подписей системных файлов...")
+        self.log_action("Начало проверки подписей системных файлов")
+
+        critical_files = [
+            (r"C:\Windows\System32\ntdll.dll", "NT Layer DLL"),
+            (r"C:\Windows\System32\kernel32.dll", "Windows NT BASE API"),
+            (r"C:\Windows\System32\user32.dll", "User32"),
+            (r"C:\Windows\System32\advapi32.dll", "Advapi32"),
+            (r"C:\Windows\System32\shell32.dll", "Shell32"),
+            (r"C:\Windows\System32\ws2_32.dll", "Winsock2"),
+            (r"C:\Windows\System32\winlogon.exe", "Winlogon"),
+            (r"C:\Windows\System32\lsass.exe", "LSA"),
+            (r"C:\Windows\System32\services.exe", "Services"),
+            (r"C:\Windows\System32\svchost.exe", "Service Host"),
+            (r"C:\Windows\System32\csrss.exe", "CSRSS"),
+            (r"C:\Windows\System32\smss.exe", "SMSS"),
+            (r"C:\Windows\explorer.exe", "Explorer"),
+            (r"C:\Windows\System32\dwm.exe", "DWM"),
+        ]
+
+        for file_path, description in critical_files:
+            if not os.path.exists(file_path):
+                desc = f"Файл {description} отсутствует: {file_path}"
+                self.signals.threat_found.emit(file_path, "yellow", desc)
+                self.suspicious.append((None, file_path, None, None, "info", "yellow", desc))
+                self.signals.log.emit(f"[YELLOW] {file_path} — {desc}")
+                continue
+
+            ps_script = f"""
+            $ErrorActionPreference = 'SilentlyContinue'
+            $sig = Get-AuthenticodeSignature '{file_path}'
+            if ($sig) {{
+                $status = $sig.Status.ToString()
+                $signer = if ($sig.SignerCertificate) {{ $sig.SignerCertificate.Subject }} else {{ 'N/A' }}
+                Write-Output "$status|$signer"
+            }} else {{
+                Write-Output "ERROR|Unable to check"
+            }}
+            """
+
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command", ps_script],
+                    capture_output=True, text=True, encoding='cp866', errors='ignore',
+                    timeout=10
+                )
+
+                output = result.stdout.strip()
+                if "|" in output:
+                    status, signer = output.split("|", 1)
+                    if status != "Valid":
+                        desc = f"Подпись {description} недействительна: {status} (Signer: {signer})"
+                        self.signals.threat_found.emit(file_path, "yellow", desc)
+                        self.suspicious.append((None, file_path, None, None, "info", "yellow", desc))
+                        self.signals.log.emit(f"[YELLOW] {file_path} — {desc}")
+                else:
+                    desc = f"{description} не подписан"
+                    self.signals.threat_found.emit(file_path, "yellow", desc)
+                    self.suspicious.append((None, file_path, None, None, "info", "yellow", desc))
+                    self.signals.log.emit(f"[YELLOW] {file_path} — {desc}")
+            except subprocess.TimeoutExpired:
+                desc = f"Таймаут проверки подписи {description}"
+                self.signals.threat_found.emit(file_path, "yellow", desc)
+                self.suspicious.append((None, file_path, None, None, "info", "yellow", desc))
+                self.signals.log.emit(f"[YELLOW] {file_path} — {desc}")
+            except Exception as e:
+                desc = f"Ошибка проверки подписи {description}: {str(e)}"
+                self.signals.threat_found.emit(file_path, "yellow", desc)
+                self.suspicious.append((None, file_path, None, None, "info", "yellow", desc))
+                self.signals.log.emit(f"[YELLOW] {file_path} — {desc}")
 
     def restore_uac(self):
         if self.options.get("restore_uac", False):
@@ -822,27 +921,389 @@ class ScanWorker(QThread):
     def restore_mbr(self):
         pass
 
+
+class Quarantine:
+    def __init__(self):
+        self.quarantine_dir = Path.home() / "Documents" / "Threatbit" / "Quarantine"
+        self.quarantine_dir.mkdir(parents=True, exist_ok=True)
+        self.key_path = self.quarantine_dir / "key.bin"
+        self.meta_path = self.quarantine_dir / "metadata.json"
+        self._init_key()
+        self._init_metadata()
+
+    def _init_key(self):
+        if self.key_path.exists():
+            try:
+                with open(self.key_path, "rb") as f:
+                    encrypted_key = f.read()
+                decrypted_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)
+                self.key = decrypted_key[1]
+            except:
+                self.key = None
+        else:
+            random_bytes = os.urandom(32)
+            self.key = base64.urlsafe_b64encode(random_bytes)
+            encrypted_key = win32crypt.CryptProtectData(self.key, None, None, None, None, 0)
+            with open(self.key_path, "wb") as f:
+                f.write(encrypted_key)
+
+    def _init_metadata(self):
+        if self.meta_path.exists():
+            try:
+                with open(self.meta_path, "r", encoding="utf-8") as f:
+                    self.metadata = json.load(f)
+            except:
+                self.metadata = {"files": []}
+        else:
+            self.metadata = {"files": []}
+
+    def _save_metadata(self):
+        with open(self.meta_path, "w", encoding="utf-8") as f:
+            json.dump(self.metadata, f, indent=4, ensure_ascii=False)
+
+    def _derive_key(self):
+        if self.key is None:
+            return None
+        return base64.urlsafe_b64encode(hashlib.sha256(self.key).digest())
+
+    def add_to_quarantine(self, file_path):
+        file_path = Path(file_path)
+        if not file_path.exists():
+            return False, "Файл не найден"
+
+        file_hash = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                file_hash.update(chunk)
+        hash_str = file_hash.hexdigest()
+
+        quar_name = hash_str[:32] + ".thrlock"
+        quar_path = self.quarantine_dir / quar_name
+
+        try:
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+
+            derived_key = self._derive_key()
+            if derived_key is None:
+                return False, "Ключ дешифрования утерян"
+
+            encrypted_data = self._encrypt(file_data, derived_key)
+
+            with open(quar_path, 'wb') as f:
+                f.write(encrypted_data)
+
+            file_path.unlink()
+
+            entry = {
+                "original_path": str(file_path),
+                "original_name": file_path.name,
+                "quarantine_path": str(quar_path),
+                "hash_sha256": hash_str,
+                "quarantined_at": datetime.now().isoformat(),
+                "size": len(file_data),
+            }
+            self.metadata["files"].append(entry)
+            self._save_metadata()
+
+            return True, quar_path
+        except Exception as e:
+            return False, str(e)
+
+    def _encrypt(self, data, key):
+        from cryptography.fernet import Fernet
+        cipher = Fernet(key)
+        return cipher.encrypt(data)
+
+    def _decrypt(self, data, key):
+        from cryptography.fernet import Fernet
+        cipher = Fernet(key)
+        return cipher.decrypt(data)
+
+    def restore_file(self, hash_sha256):
+        for entry in self.metadata["files"]:
+            if entry["hash_sha256"] == hash_sha256:
+                quar_path = Path(entry["quarantine_path"])
+                original_path = Path(entry["original_path"])
+
+                if not quar_path.exists():
+                    return False, "Файл карантина не найден"
+
+                try:
+                    with open(quar_path, 'rb') as f:
+                        encrypted_data = f.read()
+
+                    derived_key = self._derive_key()
+                    if derived_key is None:
+                        return False, "Ключ дешифрования утерян"
+
+                    decrypted_data = self._decrypt(encrypted_data, derived_key)
+
+                    original_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(original_path, 'wb') as f:
+                        f.write(decrypted_data)
+
+                    quar_path.unlink()
+                    self.metadata["files"].remove(entry)
+                    self._save_metadata()
+
+                    return True, original_path
+                except Exception as e:
+                    return False, str(e)
+
+        return False, "Файл не найден в карантине"
+
+    def delete_file(self, hash_sha256):
+        for entry in self.metadata["files"]:
+            if entry["hash_sha256"] == hash_sha256:
+                quar_path = Path(entry["quarantine_path"])
+
+                try:
+                    if quar_path.exists():
+                        quar_path.unlink()
+
+                    self.metadata["files"].remove(entry)
+                    self._save_metadata()
+
+                    return True, "Файл удалён навсегда"
+                except Exception as e:
+                    return False, str(e)
+
+        return False, "Файл не найден в карантине"
+
+    def list_quarantine(self):
+        return self.metadata.get("files", [])
+
+
+class QuarantinePage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.quarantine = Quarantine()
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.setFont(QFont("Consolas", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        self.refresh_button.clicked.connect(self.load_quarantine)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Файл", "Дата", "Размер"])
+        self.tree.setFont(QFont("Consolas", 9))
+        self.tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #252526;
+                color: white;
+                border: 1px solid #555;
+            }
+            QTreeWidget::item:selected {
+                background-color: #007ACC;
+            }
+            QHeaderView::section {
+                background-color: #333;
+                color: white;
+                padding: 4px;
+                border: 1px solid #555;
+            }
+        """)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.show_context_menu)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.header().setStretchLastSection(True)
+
+        layout.addWidget(self.refresh_button)
+        layout.addWidget(self.tree)
+        self.load_quarantine()
+
+    def load_quarantine(self):
+        self.tree.clear()
+
+        self.quarantine._init_metadata()
+
+        for entry in self.quarantine.list_quarantine():
+            size_kb = entry.get("size", 0) // 1024
+            item = QTreeWidgetItem([
+                entry["original_name"],
+                entry["quarantined_at"],
+                f"{size_kb} КБ",
+            ])
+            item.setData(0, Qt.UserRole, entry["hash_sha256"])
+            self.tree.addTopLevelItem(item)
+
+    def show_context_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+
+        file_hash = item.data(0, Qt.UserRole)
+
+        menu = QMenu(self)
+        menu.setFont(QFont("Consolas", 9))
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2D2D2D;
+                color: white;
+                border: 1px solid #555;
+            }
+            QMenu::item:selected {
+                background-color: #007ACC;
+            }
+        """)
+
+        restore_action = menu.addAction("Восстановить")
+        delete_action = menu.addAction("Удалить навсегда")
+        props_action = menu.addAction("Свойства")
+
+        action = menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+        if action == restore_action:
+            reply = QMessageBox.question(
+                self, "Восстановление",
+                f"Восстановить файл?\n\n{item.text(0)}\n\n"
+                "Файл будет расшифрован и возвращён на прежнее место.",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                success, result = self.quarantine.restore_file(file_hash)
+                if success:
+                    QMessageBox.information(self, "Карантин", f"Файл восстановлен:\n{result}")
+                    self.load_quarantine()
+                else:
+                    QMessageBox.warning(self, "Ошибка", result)
+
+        elif action == delete_action:
+            reply = QMessageBox.warning(
+                self, "Подтверждение",
+                f"Удалить файл навсегда?\n\n{item.text(0)}\n\n"
+                "Файл будет удалён без возможности восстановления.",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                success, result = self.quarantine.delete_file(file_hash)
+                if success:
+                    QMessageBox.information(self, "Карантин", result)
+                    self.load_quarantine()
+                else:
+                    QMessageBox.warning(self, "Ошибка", result)
+
+        elif action == props_action:
+            for entry in self.quarantine.list_quarantine():
+                if entry["hash_sha256"] == file_hash:
+                    msg = (
+                        f"Имя файла: {entry['original_name']}\n"
+                        f"Изначальный путь: {entry['original_path']}\n"
+                        f"Хэш (SHA-256): {entry['hash_sha256']}\n"
+                        f"Отправлен в карантин: {entry['quarantined_at']}\n"
+                        f"Размер: {entry.get('size', 0)} байт"
+                    )
+                    QMessageBox.information(self, "Свойства файла", msg)
+                    break
+
+
+class RegBackup:
+    def __init__(self, parent=None):
+        self.backup_dir = Path.home() / "Documents" / "Threatbit" / "RegBacks"
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+
+    def create_backup(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = self.backup_dir / timestamp
+        backup_path.mkdir(parents=True, exist_ok=True)
+
+        hives = [
+            ("HKLM\\SOFTWARE", "SOFTWARE.reg"),
+            ("HKLM\\SYSTEM", "SYSTEM.reg"),
+            ("HKLM\\SAM", "SAM.reg"),
+            ("HKLM\\SECURITY", "SECURITY.reg"),
+            ("HKCU", "CURRENT_USER.reg"),
+        ]
+
+        success = []
+        failed = []
+
+        for hive, filename in hives:
+            output_file = backup_path / filename
+            try:
+                result = subprocess.run(
+                    ["reg", "export", hive, str(output_file), "/y"],
+                    capture_output=True, text=True, encoding='cp866', errors='ignore'
+                )
+                if result.returncode == 0:
+                    success.append((hive, filename))
+                else:
+                    failed.append((hive, result.stderr))
+            except Exception as e:
+                failed.append((hive, str(e)))
+
+        manifest = {
+            "timestamp": timestamp,
+            "created": datetime.now().isoformat(),
+            "version": VERSION,
+            "hives": [h for h, _ in success],
+        }
+
+        with open(backup_path / "manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=4, ensure_ascii=False)
+
+        return backup_path, success, failed
+
+    def list_backups(self):
+        backups = []
+        if not self.backup_dir.exists():
+            return backups
+
+        for item in self.backup_dir.iterdir():
+            if item.is_dir() and (item / "manifest.json").exists():
+                try:
+                    with open(item / "manifest.json", "r", encoding="utf-8") as f:
+                        manifest = json.load(f)
+                    backups.append({
+                        "path": item,
+                        "timestamp": manifest.get("timestamp", item.name),
+                        "created": manifest.get("created", "N/A"),
+                        "hives": manifest.get("hives", []),
+                    })
+                except:
+                    pass
+
+        backups.sort(key=lambda x: x["created"], reverse=True)
+        return backups
+
+
 class FixWorker(QThread):
     finished = Signal()
     status = Signal(str)
     fix_log = Signal(str)
-    
+
     def __init__(self, items, fix_type):
         super().__init__()
         self.items = items
         self.fix_type = fix_type
-        
+
     def run(self):
         total = len(self.items)
         for i, item in enumerate(self.items):
-            self.status.emit(f"Исправление {i+1} из {total}...")
+            self.status.emit(f"Исправление {i + 1} из {total}...")
             self.fix_item(item)
         self.finished.emit()
-    
+
     def fix_item(self, item):
         hive, key_path, value_name, expected, action = item[0], item[1], item[2], item[3], item[4]
         desc = item[-1] if len(item) > 6 and isinstance(item[-1], str) else ""
-        
+
+        if action == "info":
+            return
+
         try:
             if action == "delete":
                 key = winreg.OpenKey(hive, key_path, 0, winreg.KEY_SET_VALUE)
@@ -885,24 +1346,25 @@ class FixWorker(QThread):
         except Exception as e:
             self.fix_log.emit(f"[ERROR] {key_path}\\{value_name} — {str(e)}")
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Threatbit Simple Scanner | v{VERSION}")
         self.setMinimumSize(950, 550)
         self.resize(950, 600)
-        
-        self.log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+
+        self.log_dir = Path.home() / "Documents" / "Threatbit" / "Logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.html_log_path = self.log_dir / "ThreatbitHTML.html"
         self.init_html_log()
-        
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         nav_frame = QFrame()
         nav_frame.setFixedWidth(180)
         nav_frame.setStyleSheet("""
@@ -931,51 +1393,55 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(nav_frame)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(0)
-        
+
         self.btn_scan = QPushButton("Threat-скан")
+        self.btn_quarantine = QPushButton("Карантин")
         self.btn_tools = QPushButton("Ручные инструменты")
         self.btn_about = QPushButton("Об Авторе")
-        
-        for btn in [self.btn_scan, self.btn_tools, self.btn_about]:
+
+        for btn in [self.btn_scan, self.btn_quarantine, self.btn_tools, self.btn_about]:
             btn.setCheckable(True)
             btn.setFont(QFont("Consolas", 11))
             nav_layout.addWidget(btn)
-        
+
         winpe_status = "PE режим" if is_winpe() else "Обычный режим"
         pe_label = QLabel(f"Режим: {winpe_status}")
         pe_label.setFont(QFont("Consolas", 8))
         pe_label.setStyleSheet("color: #AAAAAA; padding: 6px;")
         pe_label.setAlignment(Qt.AlignCenter)
         nav_layout.addWidget(pe_label)
-        
+
         self.update_label = QLabel(f"v{VERSION}")
         self.update_label.setFont(QFont("Consolas", 8))
         self.update_label.setStyleSheet("color: #888888; padding: 4px;")
         self.update_label.setAlignment(Qt.AlignCenter)
         nav_layout.addWidget(self.update_label)
-        
+
         nav_layout.addStretch()
-        
+
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.setStyleSheet("background-color: #1E1E1E; color: white; font-family: 'Consolas';")
-        
+
         self.scan_page = ScanPage(self)
+        self.quarantine_page = QuarantinePage()
         self.tools_page = ToolsPage()
         self.about_page = AboutPage()
-        
+
         self.stacked_widget.addWidget(self.scan_page)
+        self.stacked_widget.addWidget(self.quarantine_page)
         self.stacked_widget.addWidget(self.tools_page)
         self.stacked_widget.addWidget(self.about_page)
-        
+
         self.btn_scan.clicked.connect(lambda: self.switch_page(0))
-        self.btn_tools.clicked.connect(lambda: self.switch_page(1))
-        self.btn_about.clicked.connect(lambda: self.switch_page(2))
-        
+        self.btn_quarantine.clicked.connect(lambda: self.switch_page(1))
+        self.btn_tools.clicked.connect(lambda: self.switch_page(2))
+        self.btn_about.clicked.connect(lambda: self.switch_page(3))
+
         main_layout.addWidget(nav_frame)
         main_layout.addWidget(self.stacked_widget, 1)
-        
+
         self.btn_scan.setChecked(True)
-        
+
         self.update_checker = UpdateChecker()
         self.update_checker.update_available.connect(self.on_update_available)
         self.update_checker.check_finished.connect(self.on_check_finished)
@@ -990,7 +1456,7 @@ class MainWindow(QMainWindow):
 th,td{padding:8px;border:1px solid #555}th{background:#333}</style></head>
 <body><h1>Threatbit Simple Scanner v""" + VERSION + """</h1>
 <table><tr><th>Время</th><th>Тип</th><th>Действие</th><th>Описание</th></tr>""")
-    
+
     def add_html_log(self, row_type, action, description):
         color_class = "red" if row_type == "red" else "yellow" if row_type == "yellow" else "green"
         with open(self.html_log_path, "a", encoding="utf-8") as f:
@@ -1000,9 +1466,9 @@ th,td{padding:8px;border:1px solid #555}th{background:#333}</style></head>
 
     def switch_page(self, index):
         self.stacked_widget.setCurrentIndex(index)
-        for btn in [self.btn_scan, self.btn_tools, self.btn_about]:
+        for btn in [self.btn_scan, self.btn_quarantine, self.btn_tools, self.btn_about]:
             btn.setChecked(False)
-        [self.btn_scan, self.btn_tools, self.btn_about][index].setChecked(True)
+        [self.btn_scan, self.btn_quarantine, self.btn_tools, self.btn_about][index].setChecked(True)
 
     def on_update_available(self, latest_version, url):
         self.update_label.setText(f"Доступна v{latest_version}")
@@ -1014,7 +1480,7 @@ th,td{padding:8px;border:1px solid #555}th{background:#333}</style></head>
         )
         if reply == QMessageBox.Yes:
             os.startfile(url)
-    
+
     def on_check_finished(self, has_update):
         if has_update is None:
             self.update_label.setText(f"v{VERSION} (автономный режим)")
@@ -1024,6 +1490,7 @@ th,td{padding:8px;border:1px solid #555}th{background:#333}</style></head>
         else:
             self.update_label.setText(f"v{VERSION} актуальна")
             self.update_label.setStyleSheet("color: #888888; padding: 4px;")
+
 
 class ScanPage(QWidget):
     def __init__(self, main_window):
@@ -1035,15 +1502,16 @@ class ScanPage(QWidget):
         self.suspicious_list = []
         self.found_threats = []
         self.found_suspicious = []
-        
+        self.reg_backup = RegBackup()
+
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        
+
         self.options_frame = QFrame()
         self.options_frame.setStyleSheet("QFrame { background-color: #2D2D2D; border-radius: 6px; padding: 10px; }")
         options_layout = QVBoxLayout(self.options_frame)
         options_layout.setSpacing(4)
-        
+
         checks = [
             ("Удалять все вредоносные (красные) элементы", "remove_red", True),
             ("Удалять все подозрительные (жёлтые) элементы", "remove_yellow", False),
@@ -1057,7 +1525,7 @@ class ScanPage(QWidget):
             ("Выполнить sfc /scannow после проверки", "run_sfc", False),
             ("Сбросить Winsock, файл Hosts и DNS-кэш", "reset_network", False),
         ]
-        
+
         self.checkboxes = {}
         for text, key, default in checks:
             cb = QCheckBox(text)
@@ -1066,7 +1534,21 @@ class ScanPage(QWidget):
             cb.setStyleSheet("color: white;")
             self.checkboxes[key] = cb
             options_layout.addWidget(cb)
-        
+
+        self.backup_button = QPushButton("Создать RegBack [WIP]")
+        self.backup_button.setFont(QFont("Consolas", 10))
+        self.backup_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2D2D2D;
+                color: white;
+                border: 1px solid #555;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #3D3D3D; }
+        """)
+        self.backup_button.clicked.connect(self.create_backup)
+
         self.scan_button = QPushButton("Сканировать")
         self.scan_button.setFont(QFont("Consolas", 11, QFont.Bold))
         self.scan_button.setStyleSheet("""
@@ -1081,16 +1563,16 @@ class ScanPage(QWidget):
             QPushButton:pressed { background-color: #005A9E; }
         """)
         self.scan_button.clicked.connect(self.start_scan)
-        
+
         self.progress_frame = QFrame()
         self.progress_frame.setVisible(False)
         progress_layout = QVBoxLayout(self.progress_frame)
         progress_layout.setSpacing(6)
-        
+
         self.status_label = QLabel("Готов к сканированию")
         self.status_label.setFont(QFont("Consolas", 10))
         self.status_label.setStyleSheet("color: #AAAAAA;")
-        
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setStyleSheet("""
             QProgressBar {
@@ -1106,7 +1588,7 @@ class ScanPage(QWidget):
                 border-radius: 2px;
             }
         """)
-        
+
         self.threats_text = QTextEdit()
         self.threats_text.setReadOnly(True)
         self.threats_text.setMaximumHeight(130)
@@ -1120,7 +1602,7 @@ class ScanPage(QWidget):
                 font-family: 'Consolas';
             }
         """)
-        
+
         self.scan_again_button = QPushButton("Сканировать снова")
         self.scan_again_button.setFont(QFont("Consolas", 11, QFont.Bold))
         self.scan_again_button.setStyleSheet("""
@@ -1136,24 +1618,54 @@ class ScanPage(QWidget):
         """)
         self.scan_again_button.setVisible(False)
         self.scan_again_button.clicked.connect(self.reset_scan)
-        
+
         progress_layout.addWidget(self.status_label)
         progress_layout.addWidget(self.progress_bar)
         progress_layout.addWidget(self.threats_text)
         progress_layout.addWidget(self.scan_again_button)
-        
+
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(self.options_frame)
         scroll_area.setStyleSheet("QScrollArea { border: none; }")
-        
+
         layout.addWidget(scroll_area)
+        layout.addWidget(self.backup_button)
         layout.addWidget(self.scan_button)
         layout.addWidget(self.progress_frame)
         layout.addStretch()
 
+    def create_backup(self):
+        reply = QMessageBox.question(
+            self, "RegBack [WIP]",
+            "Функция создания резервной копии реестра находится в разработке.\n\n"
+            "Создать резервную копию сейчас?\n"
+            "Восстановление из RegBack пока недоступно.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        backup_path, success, failed = self.reg_backup.create_backup()
+
+        msg = f"Резервная копия реестра создана:\n{backup_path}\n\nУспешно: {len(success)} кустов\nОшибки: {len(failed)}"
+
+        if success:
+            msg += "\n\nСохранённые кусты:"
+            for hive, filename in success:
+                msg += f"\n  ✓ {hive}"
+
+        if failed:
+            msg += "\n\nОшибки:"
+            for hive, error in failed:
+                msg += f"\n  ✗ {hive}: {error}"
+
+        QMessageBox.information(self, "RegBack", msg)
+
     def reset_scan(self):
         self.options_frame.setVisible(True)
+        self.backup_button.setVisible(True)
         self.scan_button.setVisible(True)
         self.progress_frame.setVisible(False)
         self.scan_again_button.setVisible(False)
@@ -1167,6 +1679,7 @@ class ScanPage(QWidget):
 
     def start_scan(self):
         self.options_frame.setVisible(False)
+        self.backup_button.setVisible(False)
         self.scan_button.setVisible(False)
         self.progress_frame.setVisible(True)
         self.scan_again_button.setVisible(False)
@@ -1175,7 +1688,7 @@ class ScanPage(QWidget):
         self.found_threats.clear()
         self.found_suspicious.clear()
         self.threats_text.clear()
-        
+
         options = {key: cb.isChecked() for key, cb in self.checkboxes.items()}
         self.worker = ScanWorker(options)
         self.worker.signals.progress.connect(self.progress_bar.setValue)
@@ -1200,7 +1713,7 @@ class ScanPage(QWidget):
 
     def log_message(self, msg):
         if self.checkboxes.get("log_enabled", None) and self.checkboxes["log_enabled"].isChecked():
-            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir = Path.home() / "Documents" / "Threatbit" / "Logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / "Threatbit.log"
             with open(log_path, "a", encoding="utf-8") as f:
@@ -1212,7 +1725,7 @@ class ScanPage(QWidget):
         self.scan_again_button.setVisible(True)
         self.found_threats = threats
         self.found_suspicious = suspicious
-        
+
         subprocess.run([
             "powershell", "-Command",
             "Add-Type -AssemblyName System.Windows.Forms;"
@@ -1221,51 +1734,51 @@ class ScanPage(QWidget):
             "$balmsg.BalloonTipIcon = 'Info';"
             "$balmsg.BalloonTipText = 'Сканирование ThreaBit Simple Scanner завершено! Найдено угроз: "
             + str(len(threats)) + ", подозрительных: " + str(len(suspicious)) + "';"
-            "$balmsg.BalloonTipTitle = 'Успех ' + $Env:USERNAME + '!';"
-            "$balmsg.Visible = $true;"
-            "$balmsg.ShowBalloonTip(10000);"
+                                                                                "$balmsg.BalloonTipTitle = 'Успех ' + $Env:USERNAME + '!';"
+                                                                                "$balmsg.Visible = $true;"
+                                                                                "$balmsg.ShowBalloonTip(10000);"
         ], encoding='cp866', errors='ignore')
-        
+
         msg = QMessageBox(self)
         msg.setWindowTitle("Результаты сканирования")
         msg.setText(f"Найдено угроз: {len(threats)}\nПодозрительных: {len(suspicious)}")
         msg.setIcon(QMessageBox.Warning)
-        
+
         fix_threats = msg.addButton("Починить Threats", QMessageBox.ActionRole)
         skip_all = msg.addButton("Пропустить всё", QMessageBox.RejectRole)
         skip_suspicious = msg.addButton("Пропустить Suspicious", QMessageBox.ActionRole)
         fix_suspicious = msg.addButton("Починить Suspicious", QMessageBox.ActionRole)
-        
+
         msg.exec()
-        
+
         clicked = msg.clickedButton()
         if clicked == fix_threats:
             self.fix_items(self.found_threats, "threats")
         elif clicked == fix_suspicious:
             self.fix_items(self.found_suspicious, "suspicious")
-        
+
         chkdsk_msg = QMessageBox.question(
             self, "CheckDisk",
             "Вы хотите выполнить CheckDisk. Позволит найти логические ошибки и битые сектора, но принудительно отключит диск (может быть долго)?",
             QMessageBox.Yes | QMessageBox.No
         )
-        
+
         if chkdsk_msg == QMessageBox.Yes:
             disk, ok = QInputDialog.getText(self, "Выбор диска", "Введите букву диска (например C):")
             if ok and disk:
                 subprocess.run(["chkdsk", f"{disk}:", "/f", "/r", "/x"], encoding='cp866', errors='ignore')
-        
+
         reboot_msg = QMessageBox(self)
         reboot_msg.setWindowTitle("Перезагрузка")
         reboot_msg.setText("Для принятия мер нужно выполнить перезапуск")
-        
+
         reboot_winpe = reboot_msg.addButton("Перезагрузить в WinPE", QMessageBox.ActionRole)
         reboot_uefi = reboot_msg.addButton("Перезагрузить в UEFI", QMessageBox.ActionRole)
         reboot_classic = reboot_msg.addButton("Перезагрузить классически", QMessageBox.ActionRole)
         reboot_msg.addButton("Отмена", QMessageBox.RejectRole)
-        
+
         reboot_msg.exec()
-        
+
         clicked = reboot_msg.clickedButton()
         if clicked == reboot_winpe:
             subprocess.run(["shutdown", "/r", "/o", "/f", "/t", "0"], encoding='cp866', errors='ignore')
@@ -1278,10 +1791,10 @@ class ScanPage(QWidget):
         if not items:
             QMessageBox.information(self, "Информация", "Нет элементов для исправления.")
             return
-        
+
         self.progress_bar.setValue(0)
         self.status_label.setText(f"Исправление {fix_type}...")
-        
+
         self.fix_worker = FixWorker(items, fix_type)
         self.fix_worker.status.connect(self.status_label.setText)
         self.fix_worker.finished.connect(lambda: self.fix_finished(fix_type))
@@ -1290,23 +1803,25 @@ class ScanPage(QWidget):
 
     def on_fix_log(self, msg):
         if self.checkboxes.get("log_enabled", False):
-            log_dir = Path.home() / "Documents" / "ThreatbitScanner_log"
+            log_dir = Path.home() / "Documents" / "Threatbit" / "Logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / "Threatbit.log"
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"[{datetime.now().isoformat()}] {msg}\n")
-        self.main_window.add_html_log("green", "Исправлено", msg.replace("[FIXED] ", "").replace("[ERROR] ", "ОШИБКА: "))
+        self.main_window.add_html_log("green", "Исправлено",
+                                      msg.replace("[FIXED] ", "").replace("[ERROR] ", "ОШИБКА: "))
 
     def fix_finished(self, fix_type):
         self.progress_bar.setValue(100)
         self.status_label.setText(f"Исправление {fix_type} завершено!")
         QMessageBox.information(self, "Готово", f"Все элементы ({fix_type}) успешно исправлены.")
 
+
 class ToolsPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        
+
         self.tools_tabs = QTabWidget()
         self.tools_tabs.setFont(QFont("Consolas", 10))
         self.tools_tabs.setStyleSheet("""
@@ -1330,26 +1845,42 @@ class ToolsPage(QWidget):
                 background-color: #3D3D3D;
             }
         """)
-        
+
         self.services_page = ServicesPage()
         self.startup_page = StartUpPage()
         self.run_page = RegistryRunPage("Run")
         self.runonce_page = RegistryRunPage("RunOnce")
         self.tasks_page = ScheduledTasksPage()
-        
+
         self.tools_tabs.addTab(self.services_page, "Services")
         self.tools_tabs.addTab(self.startup_page, "StartUp Folders")
         self.tools_tabs.addTab(self.run_page, "Run")
         self.tools_tabs.addTab(self.runonce_page, "RunOnce")
         self.tools_tabs.addTab(self.tasks_page, "Scheduled Tasks")
-        
+
         layout.addWidget(self.tools_tabs)
+
 
 class ServicesPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        
+        layout.setSpacing(8)
+
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.setFont(QFont("Consolas", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        self.refresh_button.clicked.connect(self.load_services)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Имя службы", "Отображаемое имя", "Состояние", "Тип запуска"])
         self.tree.setFont(QFont("Consolas", 9))
@@ -1374,7 +1905,8 @@ class ServicesPage(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setStretchLastSection(True)
-        
+
+        layout.addWidget(self.refresh_button)
         layout.addWidget(self.tree)
         self.load_services()
 
@@ -1399,7 +1931,7 @@ class ServicesPage(QWidget):
         item = self.tree.itemAt(pos)
         if not item:
             return
-        
+
         menu = QMenu(self)
         menu.setFont(QFont("Consolas", 9))
         menu.setStyleSheet("""
@@ -1412,7 +1944,7 @@ class ServicesPage(QWidget):
                 background-color: #007ACC;
             }
         """)
-        
+
         start_action = menu.addAction("Запустить")
         stop_action = menu.addAction("Остановить")
         pause_action = menu.addAction("Приостановить")
@@ -1420,10 +1952,10 @@ class ServicesPage(QWidget):
         menu.addSeparator()
         delete_action = menu.addAction("Удалить")
         props_action = menu.addAction("Свойства")
-        
+
         action = menu.exec(self.tree.viewport().mapToGlobal(pos))
         service_name = item.text(0)
-        
+
         if action == start_action:
             subprocess.run(["sc", "start", service_name], capture_output=True, encoding='cp866', errors='ignore')
             time.sleep(0.5)
@@ -1444,21 +1976,40 @@ class ServicesPage(QWidget):
             self.load_services()
         elif action == delete_action:
             reply = QMessageBox.question(self, "Подтверждение",
-                f"Вы уверены, что хотите удалить службу {service_name}?",
-                QMessageBox.Yes | QMessageBox.No)
+                                         f"Вы уверены, что хотите удалить службу {service_name}?",
+                                         QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 subprocess.run(["sc", "delete", service_name], capture_output=True, encoding='cp866', errors='ignore')
                 time.sleep(0.5)
                 self.load_services()
         elif action == props_action:
-            result = subprocess.run(["sc", "qc", service_name], capture_output=True, text=True, encoding='cp866', errors='ignore')
-            QMessageBox.information(self, f"Свойства службы {service_name}", result.stdout if result.stdout else "Нет данных")
+            result = subprocess.run(["sc", "qc", service_name], capture_output=True, text=True, encoding='cp866',
+                                    errors='ignore')
+            QMessageBox.information(self, f"Свойства службы {service_name}",
+                                    result.stdout if result.stdout else "Нет данных")
+
 
 class StartUpPage(QWidget):
     def __init__(self):
         super().__init__()
+        self.quarantine = Quarantine()
         layout = QVBoxLayout(self)
-        
+        layout.setSpacing(8)
+
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.setFont(QFont("Consolas", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        self.refresh_button.clicked.connect(self.load_startup_items)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Имя файла", "Полный путь", "Расположение"])
         self.tree.setFont(QFont("Consolas", 9))
@@ -1482,7 +2033,8 @@ class StartUpPage(QWidget):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setStretchLastSection(True)
-        
+
+        layout.addWidget(self.refresh_button)
         layout.addWidget(self.tree)
         self.load_startup_items()
 
@@ -1492,7 +2044,7 @@ class StartUpPage(QWidget):
             (r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup", "Общие"),
             (os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"), "Пользовательские")
         ]
-        
+
         for path, location in paths:
             if os.path.exists(path):
                 for file in os.listdir(path):
@@ -1505,7 +2057,7 @@ class StartUpPage(QWidget):
         item = self.tree.itemAt(pos)
         if not item:
             return
-        
+
         menu = QMenu(self)
         menu.setFont(QFont("Consolas", 9))
         menu.setStyleSheet("""
@@ -1518,17 +2070,38 @@ class StartUpPage(QWidget):
                 background-color: #007ACC;
             }
         """)
-        
+
+        quarantine_action = menu.addAction("Отправить в карантин")
+        menu.addSeparator()
         delete_action = menu.addAction("Удалить")
         props_action = menu.addAction("Свойства")
         location_action = menu.addAction("Открыть расположение файла")
-        
+
         action = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        
-        if action == delete_action:
+
+        if action == quarantine_action:
+            file_path = item.text(1)
+            reply = QMessageBox.warning(
+                self, "Карантин",
+                f"Отправить файл в карантин?\n\n{file_path}\n\n"
+                "Файл будет зашифрован и перемещён в карантин.\n"
+                "Он перестанет работать.\n\n"
+                "ВНИМАНИЕ: Если ключ DPAPI будет утерян\n"
+                "(переустановка Windows, смена пользователя),\n"
+                "файл невозможно будет восстановить!",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                success, result = self.quarantine.add_to_quarantine(file_path)
+                if success:
+                    QMessageBox.information(self, "Карантин", f"Файл помещён в карантин:\n{result}")
+                    self.load_startup_items()
+                else:
+                    QMessageBox.warning(self, "Ошибка", result)
+        elif action == delete_action:
             reply = QMessageBox.question(self, "Подтверждение",
-                f"Вы уверены, что хотите удалить {item.text(0)}?",
-                QMessageBox.Yes | QMessageBox.No)
+                                         f"Вы уверены, что хотите удалить {item.text(0)}?",
+                                         QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 try:
                     os.remove(item.text(1))
@@ -1537,22 +2110,40 @@ class StartUpPage(QWidget):
                     QMessageBox.warning(self, "Ошибка", f"Не удалось удалить файл: {str(e)}")
         elif action == props_action:
             try:
-                subprocess.run(["rundll32.exe", "shell32.dll,SHObjectProperties", item.text(1)], 
-                             capture_output=True, encoding='cp866', errors='ignore')
+                subprocess.run(["rundll32.exe", "shell32.dll,SHObjectProperties", item.text(1)],
+                               capture_output=True, encoding='cp866', errors='ignore')
             except:
                 pass
         elif action == location_action:
             try:
-                subprocess.run(["explorer", "/select,", item.text(1)], capture_output=True, encoding='cp866', errors='ignore')
+                subprocess.run(["explorer", "/select,", item.text(1)], capture_output=True, encoding='cp866',
+                               errors='ignore')
             except:
                 pass
+
 
 class RegistryRunPage(QWidget):
     def __init__(self, run_type):
         super().__init__()
         self.run_type = run_type
+        self.quarantine = Quarantine()
         layout = QVBoxLayout(self)
-        
+        layout.setSpacing(8)
+
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.setFont(QFont("Consolas", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        self.refresh_button.clicked.connect(self.load_items)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Название", "Значение", "Источник"])
         self.tree.setFont(QFont("Consolas", 9))
@@ -1576,27 +2167,32 @@ class RegistryRunPage(QWidget):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         self.tree.setAlternatingRowColors(True)
         self.tree.header().setStretchLastSection(True)
-        
+
+        layout.addWidget(self.refresh_button)
         layout.addWidget(self.tree)
         self.load_items()
 
     def load_items(self):
         self.tree.clear()
         paths = []
-        
+
         if self.run_type == "Run":
             paths = [
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "HKLM\\SOFTWARE\\...\\Run"),
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run", "HKLM\\WOW6432Node\\...\\Run"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+                 "HKLM\\SOFTWARE\\...\\Run"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
+                 "HKLM\\WOW6432Node\\...\\Run"),
                 (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "HKCU\\...\\Run")
             ]
         elif self.run_type == "RunOnce":
             paths = [
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKLM\\SOFTWARE\\...\\RunOnce"),
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce", "HKLM\\WOW6432Node\\...\\RunOnce"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+                 "HKLM\\SOFTWARE\\...\\RunOnce"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce",
+                 "HKLM\\WOW6432Node\\...\\RunOnce"),
                 (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", "HKCU\\...\\RunOnce")
             ]
-        
+
         for hive, path, source in paths:
             try:
                 key = winreg.OpenKey(hive, path, 0, winreg.KEY_READ)
@@ -1617,7 +2213,7 @@ class RegistryRunPage(QWidget):
         item = self.tree.itemAt(pos)
         if not item:
             return
-        
+
         menu = QMenu(self)
         menu.setFont(QFont("Consolas", 9))
         menu.setStyleSheet("""
@@ -1630,25 +2226,55 @@ class RegistryRunPage(QWidget):
                 background-color: #007ACC;
             }
         """)
-        
+
+        quarantine_action = menu.addAction("Отправить в карантин")
+        menu.addSeparator()
         delete_action = menu.addAction("Удалить")
         edit_action = menu.addAction("Изменить значение")
         location_action = menu.addAction("Открыть расположение файла")
-        
+
         action = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        
-        if action == delete_action:
+
+        if action == quarantine_action:
+            file_path = item.text(1)
+            if file_path.startswith('"'):
+                file_path = file_path.strip('"').split('"')[0]
+
+            if os.path.exists(file_path):
+                reply = QMessageBox.warning(
+                    self, "Карантин",
+                    f"Отправить файл в карантин?\n\n{file_path}\n\n"
+                    "Файл будет зашифрован и перемещён в карантин.\n"
+                    "Он перестанет работать.\n\n"
+                    "ВНИМАНИЕ: Если ключ DPAPI будет утерян\n"
+                    "(переустановка Windows, смена пользователя),\n"
+                    "файл невозможно будет восстановить!",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    success, result = self.quarantine.add_to_quarantine(file_path)
+                    if success:
+                        QMessageBox.information(self, "Карантин", f"Файл помещён в карантин:\n{result}")
+                        self.load_items()
+                    else:
+                        QMessageBox.warning(self, "Ошибка", result)
+            else:
+                QMessageBox.warning(self, "Ошибка", f"Файл не найден:\n{file_path}")
+        elif action == delete_action:
             source = item.text(2)
             if "HKLM\\SOFTWARE" in source:
                 hive = winreg.HKEY_LOCAL_MACHINE
                 if "WOW6432Node" in source:
-                    path = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
+                    path = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion" + (
+                        "\\Run" if self.run_type == "Run" else "\\RunOnce")
                 else:
-                    path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
+                    path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + (
+                        "\\Run" if self.run_type == "Run" else "\\RunOnce")
             else:
                 hive = winreg.HKEY_CURRENT_USER
-                path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
-            
+                path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + (
+                    "\\Run" if self.run_type == "Run" else "\\RunOnce")
+
             try:
                 key = winreg.OpenKey(hive, path, 0, winreg.KEY_SET_VALUE)
                 winreg.DeleteValue(key, item.text(0))
@@ -1656,22 +2282,25 @@ class RegistryRunPage(QWidget):
                 self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(item))
             except Exception as e:
                 QMessageBox.warning(self, "Ошибка", f"Не удалось удалить параметр: {str(e)}")
-                
+
         elif action == edit_action:
-            new_value, ok = QInputDialog.getText(self, "Изменить значение", 
-                "Новое значение:", text=item.text(1))
+            new_value, ok = QInputDialog.getText(self, "Изменить значение",
+                                                 "Новое значение:", text=item.text(1))
             if ok and new_value:
                 source = item.text(2)
                 if "HKLM\\SOFTWARE" in source:
                     hive = winreg.HKEY_LOCAL_MACHINE
                     if "WOW6432Node" in source:
-                        path = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
+                        path = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion" + (
+                            "\\Run" if self.run_type == "Run" else "\\RunOnce")
                     else:
-                        path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
+                        path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + (
+                            "\\Run" if self.run_type == "Run" else "\\RunOnce")
                 else:
                     hive = winreg.HKEY_CURRENT_USER
-                    path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + ("\\Run" if self.run_type == "Run" else "\\RunOnce")
-                
+                    path = r"SOFTWARE\Microsoft\Windows\CurrentVersion" + (
+                        "\\Run" if self.run_type == "Run" else "\\RunOnce")
+
                 try:
                     key = winreg.OpenKey(hive, path, 0, winreg.KEY_SET_VALUE)
                     winreg.SetValueEx(key, item.text(0), 0, winreg.REG_SZ, new_value)
@@ -1679,7 +2308,7 @@ class RegistryRunPage(QWidget):
                     item.setText(1, new_value)
                 except Exception as e:
                     QMessageBox.warning(self, "Ошибка", f"Не удалось изменить значение: {str(e)}")
-                    
+
         elif action == location_action:
             file_path = item.text(1)
             if file_path:
@@ -1687,9 +2316,11 @@ class RegistryRunPage(QWidget):
                     if file_path.startswith('"'):
                         file_path = file_path.strip('"').split('"')[0]
                     if os.path.exists(file_path):
-                        subprocess.run(["explorer", "/select,", file_path], capture_output=True, encoding='cp866', errors='ignore')
+                        subprocess.run(["explorer", "/select,", file_path], capture_output=True, encoding='cp866',
+                                       errors='ignore')
                     elif os.path.exists(os.path.dirname(file_path)):
-                        subprocess.run(["explorer", os.path.dirname(file_path)], capture_output=True, encoding='cp866', errors='ignore')
+                        subprocess.run(["explorer", os.path.dirname(file_path)], capture_output=True, encoding='cp866',
+                                       errors='ignore')
                 except:
                     pass
 
@@ -1698,6 +2329,21 @@ class ScheduledTasksPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self.refresh_button = QPushButton("Обновить")
+        self.refresh_button.setFont(QFont("Consolas", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007ACC;
+                color: white;
+                border: none;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0098FF; }
+        """)
+        self.refresh_button.clicked.connect(self.load_tasks)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Имя задачи", "Состояние", "Следующий запуск", "Триггеры", "Автор", "Описание"])
@@ -1724,6 +2370,7 @@ class ScheduledTasksPage(QWidget):
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
         self.tree.setRootIsDecorated(True)
 
+        layout.addWidget(self.refresh_button)
         layout.addWidget(self.tree)
         self.load_tasks()
 
@@ -1929,32 +2576,34 @@ class ScheduledTasksPage(QWidget):
                 subprocess.run(["schtasks", "/delete", "/tn", task_path, "/f"],
                                capture_output=True, encoding='cp866', errors='ignore', shell=True)
                 self.load_tasks()
+
+
 class AboutPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
-        
+
         title = QLabel(f"Threatbit Simple Scanner | v{VERSION}")
         title.setFont(QFont("Consolas", 16, QFont.Bold))
         title.setStyleSheet("color: #007ACC;")
         title.setAlignment(Qt.AlignCenter)
-        
+
         author = QLabel("Author - ThreatBit with 2M12")
         author.setFont(QFont("Consolas", 12))
         author.setStyleSheet("color: white;")
         author.setAlignment(Qt.AlignCenter)
-        
+
         github = QLabel('<a href="https://github.com/2M12" style="color: #00A8E8;">2M12 Github</a>')
         github.setFont(QFont("Consolas", 11))
         github.setAlignment(Qt.AlignCenter)
         github.setOpenExternalLinks(True)
-        
+
         dzen = QLabel('<a href="https://dzen.ru/threatbit" style="color: #00A8E8;">ThreatBit Dzen</a>')
         dzen.setFont(QFont("Consolas", 11))
         dzen.setAlignment(Qt.AlignCenter)
         dzen.setOpenExternalLinks(True)
-        
+
         layout.addStretch()
         layout.addWidget(title)
         layout.addWidget(author)
@@ -1962,10 +2611,11 @@ class AboutPage(QWidget):
         layout.addWidget(dzen)
         layout.addStretch()
 
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    
+
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(30, 30, 30))
     palette.setColor(QPalette.WindowText, Qt.white)
@@ -1977,26 +2627,26 @@ if __name__ == "__main__":
     palette.setColor(QPalette.Highlight, QColor(0, 122, 204))
     palette.setColor(QPalette.HighlightedText, Qt.white)
     app.setPalette(palette)
-    
+
     if not is_admin():
         msg = QMessageBox()
         msg.setWindowTitle("Требуются права администратора")
         msg.setText("Для работы программы необходимы права администратора. Запустить с правами администратора?")
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        
+
         if msg.exec() == QMessageBox.Yes:
             run_as_admin()
         sys.exit()
-    
+
     if is_winpe():
         load_hive(r"C:\Windows\System32\config\SOFTWARE", "PE_SOFTWARE")
         load_hive(r"C:\Windows\System32\config\SYSTEM", "PE_SYSTEM")
-    
+
     window = MainWindow()
     window.show()
-    
+
     if is_winpe():
         unload_hive("PE_SOFTWARE")
         unload_hive("PE_SYSTEM")
-    
+
     sys.exit(app.exec())
