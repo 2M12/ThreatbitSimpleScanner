@@ -1,7 +1,7 @@
 <div align="center">
   
 <p align="center">
-  <img src="logo.png" width="256" alt="DeNuitkanizator">
+  <img src="logo.png" width="256" alt="ThreatbitSimpleScanner">
 </p>
 
 <br>
