@@ -1,7 +1,7 @@
 <div align="center">
   
 <p align="center">
-  <img src="logo.png" width="256" alt="ThreatbitSimpleScanner">
+  <img src="assets/logo.png" width="256" alt="ThreatbitSimpleScanner">
 </p>
 
 <br>
@@ -19,7 +19,7 @@
 
 
 <p align="center">
-  <img src="thumbnail.png" width="700" alt="ThreatbitSimpleScanner">
+  <img src="assets/thumbnail.png" width="700" alt="ThreatbitSimpleScanner">
 </p>
 
 </div>
@@ -94,27 +94,27 @@ python main.py
 ## 🖼️ Скриншоты
 
 <p align="center">
-  <img src="main_menu.png" width="700" alt="Главное меню">
+  <img src="assets/main_menu.png" width="700" alt="Главное меню">
   <br><em>Главное меню </em>
 </p>
 
 <p align="center">
-  <img src="manual_instuments.png" width="700" alt="Главное меню">
+  <img src="assets/manual_instuments.png" width="700" alt="Главное меню">
   <br><em>Ручные инструменты</em>
 </p>
 
 <p align="center">
-  <img src="example_threats.png" width="700" alt="Главное меню">
+  <img src="assets/example_threats.png" width="700" alt="Главное меню">
   <br><em>Пример угроз</em>
 </p>
 
 <p align="center">
-  <img src="html_log.png" width="700" alt="Главное меню">
+  <img src="assets/html_log.png" width="700" alt="Главное меню">
   <br><em>Пример HTML-логов</em>
 </p>
 
 <p align="center">
-  <img src="txt_log.png" width="700" alt="Главное меню">
+  <img src="assets/txt_log.png" width="700" alt="Главное меню">
   <br><em>Пример логирования в text</em>
 </p>
 
