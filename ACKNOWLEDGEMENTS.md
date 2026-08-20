@@ -2,7 +2,7 @@
 > [!TIP]
 > Сюда попадают те, кто помогают в развитии данного проекта. Вы можете также :)
 > Просто ознакомьтесь с [CONTRIBUTING.md](https://github.com/2M12/ThreatbitSimpleScanner/blob/main/CONTRIBUTING.md) и вы всё узнаете!
-> Вы можете также оценить статью на [Хабре](https://habr.com/ru/articles/1049944) и ознакомится с [кодом программы](https://github.com/2M12/ThreatbitSimpleScanner/blob/main/main.py)
+> Вы можете также оценить статью на [Хабре](https://habr.com/ru/articles/1049944) и ознакомиться с [кодом программы](https://github.com/2M12/ThreatbitSimpleScanner/blob/main/main.py)
 
 ### Огромное спасибо тем, кто действительно помогает развивать данный проект. Вы тратите своё время и помогаете росту Threatbit Simple Scanner!
 
@@ -10,7 +10,7 @@
 Те, кто улучшал Threatbit Simple Scanner своими руками - добавлял фичи, фиксил баги, оптимизировал.
 
 ## 💡 Идеи и новые подходы
-Те, кто предлагал отличные идеи и имеел оригинальные подходы к улучшению программы.
+Те, кто предлагал отличные идеи и имел оригинальные подходы к улучшению программы.
 
 * [@dTi](https://habr.com/ru/users/dTi) - идея авто-бэкапа с интеграцией Regback
 * [@ssteelfactor-oss](https://github.com/ssteelfactor-oss) - NtEnumerateKey и поиск подозрительных строк
